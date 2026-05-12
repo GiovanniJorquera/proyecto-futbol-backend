@@ -13,6 +13,7 @@ const Partido = require('./models/Partido');
 const UsuarioSistema = require('./models/UsuarioSistema');
 const bcrypt = require('bcrypt');
 const Asistencia = require('./models/Asistencia');
+const Rendimiento = require('./models/Rendimiento');
 
 if (!process.env.MONGODB_URI) {
   console.error('❌ Falta MONGODB_URI en las variables de entorno');
@@ -404,6 +405,108 @@ app.post('/pagos', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ mensaje: 'Error al guardar el pago' });
+  }
+});
+
+app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
+  try {
+
+    const rendimientos = await Rendimiento.find({
+      jugadorId: req.params.jugadorId
+    })
+    .populate('profesorId', 'nombre apellido')
+    .sort({ fecha: -1 });
+
+    res.json(rendimientos);
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      mensaje: 'Error al obtener rendimientos'
+    });
+  }
+});
+
+app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => {
+  try {
+
+    const rendimientos = await Rendimiento.find({
+      jugadorId: req.params.jugadorId
+    });
+
+    if (rendimientos.length === 0) {
+      return res.json({
+        promedioGeneral: 0
+      });
+    }
+
+    const promedioGeneral =
+      rendimientos.reduce((acc, item) => acc + item.promedio, 0)
+      / rendimientos.length;
+
+    res.json({
+      totalEvaluaciones: rendimientos.length,
+      promedioGeneral: Number(promedioGeneral.toFixed(1))
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      mensaje: 'Error al obtener resumen'
+    });
+  }
+});
+
+app.post('/rendimientos', verificarToken, async (req, res) => {
+  try {
+
+    const {
+      jugadorId,
+      profesorId,
+      velocidad,
+      resistencia,
+      tecnica,
+      disciplina,
+      comentario
+    } = req.body;
+
+    if (!jugadorId || !profesorId) {
+      return res.status(400).json({
+        mensaje: 'Jugador y profesor son obligatorios'
+      });
+    }
+
+    const promedio = (
+      velocidad +
+      resistencia +
+      tecnica +
+      disciplina
+    ) / 4;
+
+    const rendimiento = await new Rendimiento({
+      jugadorId,
+      profesorId,
+      velocidad,
+      resistencia,
+      tecnica,
+      disciplina,
+      comentario,
+      promedio
+    }).save();
+
+    res.status(201).json(rendimiento);
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      mensaje: 'Error al registrar rendimiento'
+    });
   }
 });
 
