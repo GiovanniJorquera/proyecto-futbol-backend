@@ -20,7 +20,7 @@ const ProfesorSchema = new mongoose.Schema({
   estadoSolicitud: {
     type: String,
     enum: ['pendiente', 'aceptado', 'rechazado'],
-    default: 'aceptado'
+    default: 'pendiente'
   },
 
   estado: {
