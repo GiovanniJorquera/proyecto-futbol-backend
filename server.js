@@ -11,6 +11,7 @@ const Profesor = require('./models/Profesor');
 const Division = require('./models/Division');
 const Partido = require('./models/Partido');
 const UsuarioSistema = require('./models/UsuarioSistema');
+const Jugador = require('./models/Jugador');
 const bcrypt = require('bcrypt');
 const Asistencia = require('./models/Asistencia');
 
@@ -111,6 +112,8 @@ const FichaTemporadaSchema = new mongoose.Schema({
   actitudSocial: String,
   actitudAdversidad: String,
 
+  beca: { type: Boolean, default: false },
+
   apoderado: {
     nombre: String,
     direccion: String,
@@ -124,6 +127,29 @@ const FichaTemporadaSchema = new mongoose.Schema({
 });
 
 const FichaTemporada = mongoose.model('FichaTemporada', FichaTemporadaSchema);
+
+const PagoMensualSchema = new mongoose.Schema({
+  fichaId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  mes: { type: Number, required: true },
+  año: { type: Number, required: true },
+  estado: { type: String, enum: ['pendiente', 'pagado'], default: 'pendiente' },
+  monto: { type: Number, default: 20000 },
+  fechaPago: Date,
+  observacion: String
+});
+const PagoMensual = mongoose.model('PagoMensual', PagoMensualSchema);
+
+const RendimientoSchema = new mongoose.Schema({
+  jugadorId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  profesorEmail: String,
+  fecha: { type: Date, required: true },
+  fisico: { type: Number, min: 1, max: 5 },
+  tecnico: { type: Number, min: 1, max: 5 },
+  psicologico: { type: Number, min: 1, max: 5 },
+  estrategico: { type: Number, min: 1, max: 5 },
+  notas: String
+});
+const Rendimiento = mongoose.model('Rendimiento', RendimientoSchema);
 
 function calcularEdad(fechaNacimiento) {
   const hoy = new Date();
@@ -383,16 +409,58 @@ app.post('/ficha-temporada', async (req, res) => {
 
 app.get('/ficha-temporada', verificarToken, async (req, res) => {
   try {
-    const fichas = await FichaTemporada.find().sort({
-      categoria: 1,
-      nombre: 1,
-    });
-
-    res.json(fichas);
+    const fichas = await FichaTemporada.find().sort({ categoria: 1, nombre: 1 });
+    const clientes = await UsuarioSistema.find({ rol: 'cliente' }).select('email');
+    const emailsCliente = new Set(clientes.map(c => c.email));
+    const hoy = new Date();
+    const mes = hoy.getMonth() + 1;
+    const año = hoy.getFullYear();
+    const pagos = await PagoMensual.find({ mes, año });
+    const pagoMap = {};
+    pagos.forEach(p => { pagoMap[p.fichaId.toString()] = p.estado; });
+    const fichasConEstado = fichas.map(f => ({
+      ...f.toObject(),
+      tieneCuenta: f.apoderado?.correo ? emailsCliente.has(f.apoderado.correo) : false,
+      pagoMesActual: pagoMap[f._id.toString()] || 'pendiente'
+    }));
+    res.json(fichasConEstado);
   } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al obtener fichas',
-    });
+    res.status(500).json({ mensaje: 'Error al obtener fichas' });
+  }
+});
+
+app.put('/ficha-temporada/:id', verificarToken, async (req, res) => {
+  try {
+    const datos = req.body;
+    if (datos.fechaNacimiento) {
+      datos.edad = calcularEdad(datos.fechaNacimiento);
+      datos.categoria = obtenerCategoria(datos.fechaNacimiento);
+    }
+    if (typeof datos.numerosFavoritos === 'string') {
+      datos.numerosFavoritos = datos.numerosFavoritos.split(',').map(n => Number(n.trim())).filter(n => !isNaN(n));
+    }
+    const ficha = await FichaTemporada.findByIdAndUpdate(req.params.id, datos, { new: true, runValidators: false });
+    if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
+    res.json(ficha);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al actualizar ficha' });
+  }
+});
+
+app.delete('/ficha-temporada/:id', verificarToken, async (req, res) => {
+  try {
+    const ficha = await FichaTemporada.findById(req.params.id);
+    if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
+    if (ficha.apoderado?.correo) {
+      await UsuarioSistema.deleteOne({ email: ficha.apoderado.correo, rol: 'cliente' });
+    }
+    await Asistencia.deleteMany({ jugadorId: ficha._id });
+    await FichaTemporada.findByIdAndDelete(req.params.id);
+    res.json({ mensaje: 'Jugador eliminado correctamente' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al eliminar' });
   }
 });
 
@@ -607,6 +675,30 @@ app.patch('/pagos/:id/estado', verificarToken, async (req, res) => {
       return res.status(404).json({ mensaje: 'Pago no encontrado' });
     }
 
+    if (estado === 'aprobado') {
+      let fichaId = pagoActualizado.fichaId;
+      if (!fichaId) {
+        const match = (pagoActualizado.alumno || '').match(/\(([^)]+)\)/);
+        if (match) {
+          const cedula = match[1].trim();
+          if (cedula && cedula !== 'sin RUT') {
+            const ficha = await FichaTemporada.findOne({ cedula });
+            if (ficha) fichaId = ficha._id;
+          }
+        }
+      }
+      if (fichaId) {
+        const fechaPago = pagoActualizado.fecha ? new Date(pagoActualizado.fecha) : new Date();
+        const mes = fechaPago.getMonth() + 1;
+        const año = fechaPago.getFullYear();
+        await PagoMensual.findOneAndUpdate(
+          { fichaId, mes, año },
+          { estado: 'pagado', fechaPago: new Date(), observacion: 'Aprobado por voucher' },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
     res.json(pagoActualizado);
   } catch (error) {
     console.error(error);
@@ -661,7 +753,7 @@ app.put('/aprobar/:id', verificarToken, async (req, res) => {
         nombre: `${nombreApoderado} ${apellidos}`,
         email,
         passwordHash,
-        rol: 'apoderado',
+        rol: 'cliente',
         estado: 'activo',
         debeCambiarPassword: true,
         inscripcionId: inscripcion._id
@@ -785,6 +877,241 @@ app.get('/asistencias/resumen/:jugadorId', verificarToken, async (req, res) => {
       mensaje: 'Error al obtener resumen'
     });
   }
+});
+
+/* VISTA CLIENTE */
+app.get('/cliente/mi-ficha', verificarToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    if (!email) return res.status(400).json({ mensaje: 'Token sin email' });
+    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': email });
+    if (!ficha) return res.status(404).json({ mensaje: 'No se encontró ficha asociada a este correo' });
+    res.json(ficha);
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al obtener ficha' });
+  }
+});
+
+app.post('/admin/crear-cliente-ficha/:fichaId', verificarToken, async (req, res) => {
+  try {
+    const ficha = await FichaTemporada.findById(req.params.fichaId);
+    if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
+
+    const email = ficha.apoderado?.correo;
+    if (!email) return res.status(400).json({ mensaje: 'La ficha no tiene correo de apoderado' });
+
+    const existe = await UsuarioSistema.findOne({ email });
+    if (existe) return res.status(400).json({ mensaje: 'Ya existe una cuenta con ese correo' });
+
+    const passwordTemporal = generarClaveTemporal(ficha.nombre, ficha.nombre.split(' ')[1] || ficha.nombre, ficha.cedula || '0000-0');
+    const passwordHash = await bcrypt.hash(passwordTemporal, 10);
+
+    await new UsuarioSistema({
+      nombre: ficha.apoderado.nombre || 'Apoderado',
+      email,
+      passwordHash,
+      rol: 'cliente',
+      estado: 'activo',
+      debeCambiarPassword: true,
+    }).save();
+
+    res.status(201).json({ mensaje: 'Cuenta cliente creada', email, passwordTemporal });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error al crear cuenta cliente' });
+  }
+});
+
+/* RUTAS PROFESOR */
+
+function soloProfesor(req, res, next) {
+  if (req.user.rol !== 'profesor') return res.status(403).json({ mensaje: 'Acceso solo para profesores' });
+  next();
+}
+
+app.get('/profesor/mi-perfil', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
+    res.json(usuario.profesorId);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener perfil' }); }
+});
+
+app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
+    const divisiones = usuario.profesorId.divisiones || [];
+    if (!divisiones.length) return res.json([]);
+    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ nombre: 1 });
+    res.json(fichas);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener fichas' }); }
+});
+
+app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
+    const divisiones = usuario.profesorId.divisiones || [];
+    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).select('_id');
+    const fichaIds = fichas.map(f => f._id);
+    const filtro = { jugadorId: { $in: fichaIds } };
+    if (fecha) {
+      filtro.fecha = {
+        $gte: new Date(`${fecha}T00:00:00`),
+        $lte: new Date(`${fecha}T23:59:59`)
+      };
+    }
+    const asistencias = await Asistencia.find(filtro);
+    res.json(asistencias);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener asistencias' }); }
+});
+
+app.post('/profesor/asistencias/lote', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const { fecha, registros } = req.body;
+    if (!fecha || !Array.isArray(registros)) {
+      return res.status(400).json({ mensaje: 'Fecha y registros son obligatorios' });
+    }
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    const profesorId = usuario.profesorId?._id;
+    const fechaNormalizada = new Date(`${fecha}T00:00:00`);
+    const resultados = [];
+    for (const r of registros) {
+      const { jugadorId, estado } = r;
+      const asistencia = await Asistencia.findOneAndUpdate(
+        { jugadorId, fecha: fechaNormalizada },
+        { jugadorId, fecha: fechaNormalizada, estado, profesorId },
+        { upsert: true, new: true }
+      );
+      resultados.push(asistencia);
+    }
+    res.json({ mensaje: 'Asistencias guardadas', total: resultados.length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al guardar asistencias' });
+  }
+});
+
+/* ── VINCULAR PAGO APROBADO → PAGO MENSUAL (retroactivo) ── */
+app.post('/admin/vincular-pago-mensual/:pagoId', verificarToken, async (req, res) => {
+  try {
+    const pago = await Pago.findById(req.params.pagoId);
+    if (!pago) return res.status(404).json({ mensaje: 'Pago no encontrado' });
+    if (pago.estado !== 'aprobado') return res.status(400).json({ mensaje: 'El pago no está aprobado' });
+
+    let fichaId = pago.fichaId;
+    if (!fichaId) {
+      const match = (pago.alumno || '').match(/\(([^)]+)\)/);
+      if (match) {
+        const cedula = match[1].trim();
+        if (cedula && cedula !== 'sin RUT') {
+          const ficha = await FichaTemporada.findOne({ cedula });
+          if (ficha) fichaId = ficha._id;
+        }
+      }
+    }
+    if (!fichaId) return res.status(404).json({ mensaje: 'No se pudo identificar al jugador. Verifica que el RUT en el voucher coincida con el de la ficha.' });
+
+    const fechaPago = pago.fecha ? new Date(pago.fecha) : new Date();
+    const mes = fechaPago.getMonth() + 1;
+    const año = fechaPago.getFullYear();
+    const pagoMensual = await PagoMensual.findOneAndUpdate(
+      { fichaId, mes, año },
+      { estado: 'pagado', fechaPago: new Date(), observacion: 'Vinculado manualmente por admin' },
+      { upsert: true, new: true }
+    );
+    res.json({ mensaje: 'Pago mensual actualizado', pagoMensual });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al vincular pago mensual' });
+  }
+});
+
+/* ── PAGOS MENSUALES ────────────────────────────── */
+app.put('/admin/pago-mensual/:fichaId', verificarToken, async (req, res) => {
+  try {
+    const { estado, observacion } = req.body;
+    const hoy = new Date();
+    const pago = await PagoMensual.findOneAndUpdate(
+      { fichaId: req.params.fichaId, mes: hoy.getMonth() + 1, año: hoy.getFullYear() },
+      { estado, observacion, fechaPago: estado === 'pagado' ? new Date() : undefined },
+      { upsert: true, new: true }
+    );
+    res.json(pago);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al actualizar pago' }); }
+});
+
+app.get('/cliente/mis-pagos-mensuales', verificarToken, async (req, res) => {
+  try {
+    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': req.user.email });
+    if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
+    const hoy = new Date();
+    const mes = hoy.getMonth() + 1;
+    const año = hoy.getFullYear();
+    const pagos = await PagoMensual.find({ fichaId: ficha._id }).sort({ año: -1, mes: -1 }).limit(6);
+    const pagoActual = pagos.find(p => p.mes === mes && p.año === año);
+    res.json({
+      mesActual: { mes, año, estado: pagoActual?.estado || 'pendiente', monto: 20000 },
+      historial: pagos
+    });
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener pagos' }); }
+});
+
+/* ── RENDIMIENTO ────────────────────────────────── */
+app.post('/profesor/rendimiento', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const { fecha, registros } = req.body;
+    const fechaObj = new Date(fecha);
+    const resultados = [];
+    for (const r of registros) {
+      const rend = await Rendimiento.findOneAndUpdate(
+        { jugadorId: r.jugadorId, fecha: fechaObj },
+        { jugadorId: r.jugadorId, profesorEmail: req.user.email, fecha: fechaObj,
+          fisico: r.fisico, tecnico: r.tecnico, psicologico: r.psicologico,
+          estrategico: r.estrategico, notas: r.notas || '' },
+        { upsert: true, new: true }
+      );
+      resultados.push(rend);
+    }
+    res.json({ mensaje: 'Rendimiento guardado', total: resultados.length });
+  } catch (e) { res.status(500).json({ mensaje: 'Error al guardar rendimiento' }); }
+});
+
+app.get('/profesor/rendimiento', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    const divisiones = usuario?.profesorId?.divisiones || [];
+    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).select('_id');
+    const fichaIds = fichas.map(f => f._id);
+    const filtro = { jugadorId: { $in: fichaIds } };
+    if (fecha) filtro.fecha = new Date(fecha);
+    const rendimientos = await Rendimiento.find(filtro);
+    res.json(rendimientos);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
+});
+
+app.get('/admin/rendimiento/:jugadorId', verificarToken, async (req, res) => {
+  try {
+    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId }).sort({ fecha: -1 }).limit(20);
+    res.json(rendimientos);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
+});
+
+app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
+  try {
+    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': req.user.email });
+    if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
+    const rendimientos = await Rendimiento.find({ jugadorId: ficha._id }).sort({ fecha: -1 });
+    if (!rendimientos.length) return res.json({ promedio: null, historial: [] });
+    const avg = (campo) => +(rendimientos.reduce((s, r) => s + (r[campo] || 0), 0) / rendimientos.length).toFixed(1);
+    res.json({
+      promedio: { fisico: avg('fisico'), tecnico: avg('tecnico'), psicologico: avg('psicologico'), estrategico: avg('estrategico'), sesiones: rendimientos.length },
+      historial: rendimientos.slice(0, 10)
+    });
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
 });
 
 const PORT = process.env.PORT || 3000;

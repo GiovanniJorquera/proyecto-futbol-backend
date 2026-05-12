@@ -38,6 +38,11 @@ const PagoSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  fichaId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FichaTemporada',
+    default: null,
+  },
 });
 
 module.exports = mongoose.model('Pago', PagoSchema);
