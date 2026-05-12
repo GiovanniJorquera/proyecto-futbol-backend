@@ -140,18 +140,6 @@ const PagoMensualSchema = new mongoose.Schema({
 });
 const PagoMensual = mongoose.model('PagoMensual', PagoMensualSchema);
 
-const RendimientoSchema = new mongoose.Schema({
-  jugadorId: { type: mongoose.Schema.Types.ObjectId, required: true },
-  profesorEmail: String,
-  fecha: { type: Date, required: true },
-  fisico: { type: Number, min: 1, max: 5 },
-  tecnico: { type: Number, min: 1, max: 5 },
-  psicologico: { type: Number, min: 1, max: 5 },
-  estrategico: { type: Number, min: 1, max: 5 },
-  notas: String
-});
-const Rendimiento = mongoose.model('Rendimiento', RendimientoSchema);
-
 function calcularEdad(fechaNacimiento) {
   const hoy = new Date();
   const nacimiento = new Date(`${fechaNacimiento}T00:00:00`);

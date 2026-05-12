@@ -9,43 +9,10 @@ const RendimientoSchema = new mongoose.Schema({
 
   profesorId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Profesor',
-    required: true
+    ref: 'Profesor'
   },
 
-  velocidad: {
-    type: Number,
-    min: 1,
-    max: 10,
-    required: true
-  },
-
-  resistencia: {
-    type: Number,
-    min: 1,
-    max: 10,
-    required: true
-  },
-
-  tecnica: {
-    type: Number,
-    min: 1,
-    max: 10,
-    required: true
-  },
-
-  disciplina: {
-    type: Number,
-    min: 1,
-    max: 10,
-    required: true
-  },
-
-  promedio: {
-  type: Number
-},
-
-  comentario: {
+  profesorEmail: {
     type: String,
     default: ''
   },
@@ -53,6 +20,68 @@ const RendimientoSchema = new mongoose.Schema({
   fecha: {
     type: Date,
     default: Date.now
+  },
+
+  velocidad: {
+    type: Number,
+    min: 1,
+    max: 10
+  },
+
+  resistencia: {
+    type: Number,
+    min: 1,
+    max: 10
+  },
+
+  tecnica: {
+    type: Number,
+    min: 1,
+    max: 10
+  },
+
+  disciplina: {
+    type: Number,
+    min: 1,
+    max: 10
+  },
+
+  comentario: {
+    type: String,
+    default: ''
+  },
+
+  fisico: {
+    type: Number,
+    min: 1,
+    max: 5
+  },
+
+  tecnico: {
+    type: Number,
+    min: 1,
+    max: 5
+  },
+
+  psicologico: {
+    type: Number,
+    min: 1,
+    max: 5
+  },
+
+  estrategico: {
+    type: Number,
+    min: 1,
+    max: 5
+  },
+
+  notas: {
+    type: String,
+    default: ''
+  },
+
+  promedio: {
+    type: Number
   }
 
 }, { timestamps: true });
