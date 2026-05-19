@@ -10,31 +10,43 @@ const jugadorSchema = new mongoose.Schema({
 
   nombre: {
     type: String,
-    required: true,
+    default: '',
     trim: true
+  },
+  apellidoPaterno: {
+  type: String,
+  default: ''
+  },
+
+  apellidoMaterno: {
+  type: String,
+  default: ''
   },
 
   direccion: {
     type: String,
-    required: true
+    default: ''
   },
 
   ciudad: {
     type: String,
-    required: true
+    default: '' 
   },
 
   fechaNacimiento: {
     type: Date,
-    required: true
+    default: Date.now
   },
 
   cedula: {
     type: String,
-    required: true
+    default: ''
   },
 
-  edad: Number,
+  edad: {
+    type: Number,
+    default: 0
+  },
 
   establecimiento: String,
   curso: String,

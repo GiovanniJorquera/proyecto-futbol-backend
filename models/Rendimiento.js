@@ -63,7 +63,7 @@ const RendimientoSchema = new mongoose.Schema({
     max: 5
   },
 
-  psicologico: {
+  Actitudinal: {
     type: Number,
     min: 1,
     max: 5
