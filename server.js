@@ -37,6 +37,8 @@ async function getConfig() {
   return config;
 }
 
+const rateLimit = require('express-rate-limit');
+
 const app = express();
 app.set('trust proxy', 1);
 
@@ -46,6 +48,45 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '20mb' }));
+
+/* Elimina claves con $ o . del body para prevenir NoSQL injection (compatible con Express 5) */
+function sanitizarBody(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  for (const key of Object.keys(obj)) {
+    if (key.startsWith('$') || key.includes('.')) { delete obj[key]; continue; }
+    if (typeof obj[key] === 'object') sanitizarBody(obj[key]);
+  }
+  return obj;
+}
+app.use((req, _res, next) => { if (req.body) sanitizarBody(req.body); next(); });
+
+/* Health-check público — responde sin tocar la BD, evita cold start */
+app.get('/ping', (_req, res) => res.json({ ok: true }));
+
+/* Rate limiting en endpoints públicos de registro */
+const limiteRegistro = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { mensaje: 'Demasiados intentos. Espera 15 minutos antes de volver a intentarlo.' }
+});
+
+/* Valida longitud de campos de texto para evitar saturación */
+function validarLongitudes(campos) {
+  const limites = { nombre: 80, apellidos: 80, apellidoPaterno: 80, apellidoMaterno: 80,
+    correo: 100, telefono: 20, rut: 15, cedula: 15, direccion: 150, notas: 500 };
+  function revisar(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'string' && limites[k] && v.length > limites[k])
+        return `El campo "${k}" supera el máximo permitido (${limites[k]} caracteres)`;
+      if (typeof v === 'object') { const r = revisar(v); if (r) return r; }
+    }
+    return null;
+  }
+  return revisar(campos);
+}
 
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('🟢 Conectado a MongoDB'))
@@ -139,6 +180,14 @@ const PagoMensualSchema = new mongoose.Schema({
   observacion: String
 });
 const PagoMensual = mongoose.model('PagoMensual', PagoMensualSchema);
+
+const InvitacionSchema = new mongoose.Schema({
+  token: { type: String, required: true, unique: true },
+  creadoEn: { type: Date, default: Date.now },
+  expiraEn: { type: Date, required: true },
+  usado: { type: Boolean, default: false }
+});
+const Invitacion = mongoose.model('Invitacion', InvitacionSchema);
 
 function calcularEdad(fechaNacimiento) {
   const hoy = new Date();
@@ -354,8 +403,10 @@ app.delete('/partidos/:id', verificarToken, async (req, res) => {
   catch (e) { res.status(500).json({ mensaje: 'Error al eliminar partido' }); }
 });
 
-app.post('/inscripcion', async (req, res) => {
+app.post('/inscripcion', limiteRegistro, async (req, res) => {
   try {
+    const error = validarLongitudes(req.body);
+    if (error) return res.status(400).json({ mensaje: error });
     const nueva = new Inscripcion(req.body);
     await nueva.save();
     console.log('💾 Guardado en MongoDB');
@@ -366,9 +417,63 @@ app.post('/inscripcion', async (req, res) => {
   }
 });
 
-app.post('/ficha-temporada', async (req, res) => {
+/* INVITACIONES - link temporal de registro */
+app.post('/admin/generar-invitacion', verificarToken, async (req, res) => {
   try {
-    const datos = req.body;
+    const crypto = require('crypto');
+    const token = crypto.randomBytes(24).toString('hex');
+    const expiraEn = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    await Invitacion.create({ token, expiraEn });
+    res.json({ token });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al generar invitación' });
+  }
+});
+
+app.get('/invitacion/:token', async (req, res) => {
+  try {
+    const inv = await Invitacion.findOne({ token: req.params.token });
+    if (!inv) return res.status(404).json({ mensaje: 'Link inválido' });
+    if (inv.usado) return res.status(410).json({ mensaje: 'Este link ya fue utilizado' });
+    if (inv.expiraEn < new Date()) return res.status(410).json({ mensaje: 'Este link ha expirado' });
+    res.json({ valido: true });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al validar invitación' });
+  }
+});
+
+app.post('/ficha-temporada', limiteRegistro, async (req, res) => {
+  try {
+    const { invitacionToken, ...datos } = req.body;
+    const errorLong = validarLongitudes(datos);
+    if (errorLong) return res.status(400).json({ mensaje: errorLong });
+
+    if (invitacionToken) {
+      const inv = await Invitacion.findOne({ token: invitacionToken });
+      if (!inv) return res.status(404).json({ mensaje: 'Link inválido' });
+      if (inv.usado) return res.status(410).json({ mensaje: 'Este link ya fue utilizado' });
+      if (inv.expiraEn < new Date()) return res.status(410).json({ mensaje: 'Este link ha expirado' });
+      inv.usado = true;
+      await inv.save();
+    }
+
+    // Normalizar payload del registro-invitado (estructura pupilo/apoderado)
+    if (datos.pupilo) {
+      const p = datos.pupilo;
+      const a = datos.apoderado || {};
+      datos.nombre = [p.nombre, p.apellidoPaterno, p.apellidoMaterno].filter(Boolean).join(' ');
+      datos.cedula = p.rut;
+      datos.fechaNacimiento = p.fechaNacimiento;
+      datos.direccion = p.direccion;
+      datos.ciudad = p.comuna?.name ?? p.comuna ?? '';
+      datos.apoderado = {
+        nombre: [a.nombre, a.apellidos].filter(Boolean).join(' '),
+        correo: a.correo,
+        telefonoCasa: a.telefono,
+        whatsapp: a.telefono,
+      };
+      delete datos.pupilo;
+    }
 
     datos.edad = calcularEdad(datos.fechaNacimiento);
     datos.categoria = obtenerCategoria(datos.fechaNacimiento);
@@ -381,7 +486,6 @@ app.post('/ficha-temporada', async (req, res) => {
     }
 
     const ficha = new FichaTemporada(datos);
-
     await ficha.save();
 
     res.status(201).json({
@@ -464,105 +568,74 @@ app.post('/pagos', async (req, res) => {
   }
 });
 
+/* Calcula el promedio de los valores numéricos de un objeto de sub-ítems */
+function promedioCategoria(obj) {
+  if (!obj) return 0;
+  const vals = Object.entries(obj)
+    .filter(([k]) => k !== 'promedio')
+    .map(([, v]) => Number(v))
+    .filter(v => !isNaN(v));
+  if (!vals.length) return 0;
+  return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length);
+}
+
 app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
   try {
-
-    const rendimientos = await Rendimiento.find({
-      jugadorId: req.params.jugadorId
-    })
-    .populate('profesorId', 'nombre apellido')
-    .sort({ fecha: -1 });
-
+    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId })
+      .sort({ fecha: -1 });
     res.json(rendimientos);
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al obtener rendimientos'
-    });
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener rendimientos' });
   }
 });
 
 app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => {
   try {
+    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId });
+    if (!rendimientos.length) return res.json({ totalEvaluaciones: 0, promedioGeneral: 0 });
 
-    const rendimientos = await Rendimiento.find({
-      jugadorId: req.params.jugadorId
-    });
-
-    if (rendimientos.length === 0) {
-      return res.json({
-        promedioGeneral: 0
-      });
-    }
-
-    const promedioGeneral =
-      rendimientos.reduce((acc, item) => acc + item.promedio, 0)
-      / rendimientos.length;
+    const avg = (campo) =>
+      Math.round(rendimientos.reduce((s, r) => s + (r[campo]?.promedio || 0), 0) / rendimientos.length);
 
     res.json({
       totalEvaluaciones: rendimientos.length,
-      promedioGeneral: Number(promedioGeneral.toFixed(1))
+      fisico:      avg('fisico'),
+      tecnico:     avg('tecnico'),
+      actitudinal: avg('actitudinal'),
+      estrategico: avg('estrategico'),
+      promedioGeneral: Math.round(
+        rendimientos.reduce((s, r) => s + (r.promedioGeneral || 0), 0) / rendimientos.length
+      )
     });
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al obtener resumen'
-    });
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener resumen' });
   }
 });
 
 app.post('/rendimientos', verificarToken, async (req, res) => {
   try {
+    const { jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico, comentario } = req.body;
+    if (!jugadorId) return res.status(400).json({ mensaje: 'jugadorId es obligatorio' });
 
-    const {
-      jugadorId,
-      profesorId,
-      velocidad,
-      resistencia,
-      tecnica,
-      disciplina,
-      comentario
-    } = req.body;
+    // Calcular promedios de cada categoría
+    fisico.promedio      = promedioCategoria(fisico);
+    tecnico.promedio     = promedioCategoria(tecnico);
+    actitudinal.promedio = promedioCategoria(actitudinal);
+    estrategico.promedio = promedioCategoria(estrategico);
 
-    if (!jugadorId || !profesorId) {
-      return res.status(400).json({
-        mensaje: 'Jugador y profesor son obligatorios'
-      });
-    }
-
-    const promedio = (
-      velocidad +
-      resistencia +
-      tecnica +
-      disciplina
-    ) / 4;
+    const promedioGeneral = Math.round(
+      (fisico.promedio + tecnico.promedio + actitudinal.promedio + estrategico.promedio) / 4
+    );
 
     const rendimiento = await new Rendimiento({
-      jugadorId,
-      profesorId,
-      velocidad,
-      resistencia,
-      tecnica,
-      disciplina,
-      comentario,
-      promedio
+      jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico,
+      promedioGeneral, comentario
     }).save();
 
     res.status(201).json(rendimiento);
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al registrar rendimiento'
-    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al registrar rendimiento' });
   }
 });
 
@@ -1195,12 +1268,31 @@ app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
   try {
     const ficha = await FichaTemporada.findOne({ 'apoderado.correo': req.user.email });
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
-    const rendimientos = await Rendimiento.find({ jugadorId: ficha._id }).sort({ fecha: -1 });
+
+    const rendimientos = await Rendimiento.find({ jugadorId: ficha._id }).sort({ fecha: 1 });
     if (!rendimientos.length) return res.json({ promedio: null, historial: [] });
-    const avg = (campo) => +(rendimientos.reduce((s, r) => s + (r[campo] || 0), 0) / rendimientos.length).toFixed(1);
+
+    const avg = (campo) =>
+      Math.round(rendimientos.reduce((s, r) => s + (r[campo]?.promedio || 0), 0) / rendimientos.length);
+
     res.json({
-      promedio: { fisico: avg('fisico'), tecnico: avg('tecnico'), psicologico: avg('psicologico'), estrategico: avg('estrategico'), sesiones: rendimientos.length },
-      historial: rendimientos.slice(0, 10)
+      promedio: {
+        fisico:      avg('fisico'),
+        tecnico:     avg('tecnico'),
+        actitudinal: avg('actitudinal'),
+        estrategico: avg('estrategico'),
+        general:     Math.round(rendimientos.reduce((s, r) => s + (r.promedioGeneral || 0), 0) / rendimientos.length),
+        sesiones:    rendimientos.length
+      },
+      historial: rendimientos.map(r => ({
+        fecha:       r.fecha,
+        fisico:      r.fisico?.promedio || 0,
+        tecnico:     r.tecnico?.promedio || 0,
+        actitudinal: r.actitudinal?.promedio || 0,
+        estrategico: r.estrategico?.promedio || 0,
+        general:     r.promedioGeneral || 0,
+        comentario:  r.comentario
+      }))
     });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
 });
