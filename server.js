@@ -140,6 +140,14 @@ const PagoMensualSchema = new mongoose.Schema({
 });
 const PagoMensual = mongoose.model('PagoMensual', PagoMensualSchema);
 
+const InvitacionSchema = new mongoose.Schema({
+  token: { type: String, required: true, unique: true },
+  creadoEn: { type: Date, default: Date.now },
+  expiraEn: { type: Date, required: true },
+  usado: { type: Boolean, default: false }
+});
+const Invitacion = mongoose.model('Invitacion', InvitacionSchema);
+
 function calcularEdad(fechaNacimiento) {
   const hoy = new Date();
   const nacimiento = new Date(`${fechaNacimiento}T00:00:00`);
@@ -366,9 +374,43 @@ app.post('/inscripcion', async (req, res) => {
   }
 });
 
+/* INVITACIONES - link temporal de registro */
+app.post('/admin/generar-invitacion', verificarToken, async (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const token = crypto.randomBytes(24).toString('hex');
+    const expiraEn = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    await Invitacion.create({ token, expiraEn });
+    res.json({ token });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al generar invitación' });
+  }
+});
+
+app.get('/invitacion/:token', async (req, res) => {
+  try {
+    const inv = await Invitacion.findOne({ token: req.params.token });
+    if (!inv) return res.status(404).json({ mensaje: 'Link inválido' });
+    if (inv.usado) return res.status(410).json({ mensaje: 'Este link ya fue utilizado' });
+    if (inv.expiraEn < new Date()) return res.status(410).json({ mensaje: 'Este link ha expirado' });
+    res.json({ valido: true });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al validar invitación' });
+  }
+});
+
 app.post('/ficha-temporada', async (req, res) => {
   try {
-    const datos = req.body;
+    const { invitacionToken, ...datos } = req.body;
+
+    if (invitacionToken) {
+      const inv = await Invitacion.findOne({ token: invitacionToken });
+      if (!inv) return res.status(404).json({ mensaje: 'Link inválido' });
+      if (inv.usado) return res.status(410).json({ mensaje: 'Este link ya fue utilizado' });
+      if (inv.expiraEn < new Date()) return res.status(410).json({ mensaje: 'Este link ha expirado' });
+      inv.usado = true;
+      await inv.save();
+    }
 
     datos.edad = calcularEdad(datos.fechaNacimiento);
     datos.categoria = obtenerCategoria(datos.fechaNacimiento);
@@ -381,7 +423,6 @@ app.post('/ficha-temporada', async (req, res) => {
     }
 
     const ficha = new FichaTemporada(datos);
-
     await ficha.save();
 
     res.status(201).json({
