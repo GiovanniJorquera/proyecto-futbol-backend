@@ -37,7 +37,6 @@ async function getConfig() {
   return config;
 }
 
-const mongoSanitize = require('express-mongo-sanitize');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
@@ -50,8 +49,16 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '20mb' }));
 
-/* Elimina claves con $ o . del body para prevenir NoSQL injection */
-app.use(mongoSanitize());
+/* Elimina claves con $ o . del body para prevenir NoSQL injection (compatible con Express 5) */
+function sanitizarBody(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  for (const key of Object.keys(obj)) {
+    if (key.startsWith('$') || key.includes('.')) { delete obj[key]; continue; }
+    if (typeof obj[key] === 'object') sanitizarBody(obj[key]);
+  }
+  return obj;
+}
+app.use((req, _res, next) => { if (req.body) sanitizarBody(req.body); next(); });
 
 /* Rate limiting en endpoints públicos de registro */
 const limiteRegistro = rateLimit({
