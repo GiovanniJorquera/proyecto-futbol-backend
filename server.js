@@ -11,7 +11,6 @@ const Profesor = require('./models/Profesor');
 const Division = require('./models/Division');
 const Partido = require('./models/Partido');
 const UsuarioSistema = require('./models/UsuarioSistema');
-const Jugador = require('./models/Jugador');
 const bcrypt = require('bcrypt');
 const Asistencia = require('./models/Asistencia');
 const Rendimiento = require('./models/Rendimiento');
@@ -216,6 +215,29 @@ function obtenerCategoria(fechaNacimiento) {
   if (edad <= 18) return 'Sub-18';
 
   return 'Libre';
+}
+
+function obtenerCategoriaDinamica(fechaNacimiento, genero = null) {
+  const edad = calcularEdad(fechaNacimiento);
+  
+  // Prioridad: rama femenina si género indica "Femenino"
+  if (genero && typeof genero === 'object' && (genero.name === 'Femenino' || genero.value === 'Femenino')) {
+    return 'Femenina';
+  }
+  if (typeof genero === 'string' && genero.toLowerCase().includes('femenin')) {
+    return 'Femenina';
+  }
+  
+  // Asignación por rango de edad
+  if (edad >= 5 && edad <= 6) return 'Sub-6';
+  if (edad >= 7 && edad <= 8) return 'Sub-8';
+  if (edad >= 9 && edad <= 10) return 'Sub-10';
+  if (edad >= 11 && edad <= 12) return 'Sub-12';
+  if (edad >= 13 && edad <= 14) return 'Sub-14';
+  if (edad >= 15 && edad <= 16) return 'Sub-16';
+  if (edad >= 17 && edad <= 18) return 'Sub-18';
+  
+  return 'Fuera de Rango / Adulto';
 }
 /*Creación automática de usuarios con datos registrados*/
 function generarUsuario(nombre, apellido, dominio = 'nombredominio.cl') {
@@ -750,7 +772,17 @@ function crudRoutes(app, path, Model) {
 }
 
 crudRoutes(app, '/estudiantes', Estudiante);
-crudRoutes(app, '/divisiones', Division);
+
+/* DIVISIONES: solo lectura (protegido contra creación) */
+app.get('/divisiones', verificarToken, async (req, res) => {
+  try { 
+    res.json(await Division.find().sort({ createdAt: -1 })); 
+  }
+  catch (e) { 
+    res.status(500).json({ mensaje: 'Error al obtener divisiones' }); 
+  }
+});
+
 crudRoutes(app, '/profesores', Profesor);
 
 app.post('/noticias', verificarToken, async (req, res) => {
