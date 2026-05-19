@@ -602,16 +602,6 @@ function promedioCategoria(obj) {
   return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length);
 }
 
-app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
-  try {
-    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId })
-      .sort({ fecha: -1 });
-    res.json(rendimientos);
-  } catch (e) {
-    res.status(500).json({ mensaje: 'Error al obtener rendimientos' });
-  }
-});
-
 app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => {
   try {
     const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId });
@@ -632,6 +622,16 @@ app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => 
     });
   } catch (e) {
     res.status(500).json({ mensaje: 'Error al obtener resumen' });
+  }
+});
+
+app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
+  try {
+    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId })
+      .sort({ fecha: -1 });
+    res.json(rendimientos);
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener rendimientos' });
   }
 });
 
