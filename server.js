@@ -37,6 +37,9 @@ async function getConfig() {
   return config;
 }
 
+const mongoSanitize = require('express-mongo-sanitize');
+const rateLimit = require('express-rate-limit');
+
 const app = express();
 app.set('trust proxy', 1);
 
@@ -46,6 +49,34 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '20mb' }));
+
+/* Elimina claves con $ o . del body para prevenir NoSQL injection */
+app.use(mongoSanitize());
+
+/* Rate limiting en endpoints públicos de registro */
+const limiteRegistro = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { mensaje: 'Demasiados intentos. Espera 15 minutos antes de volver a intentarlo.' }
+});
+
+/* Valida longitud de campos de texto para evitar saturación */
+function validarLongitudes(campos) {
+  const limites = { nombre: 80, apellidos: 80, apellidoPaterno: 80, apellidoMaterno: 80,
+    correo: 100, telefono: 20, rut: 15, cedula: 15, direccion: 150, notas: 500 };
+  function revisar(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'string' && limites[k] && v.length > limites[k])
+        return `El campo "${k}" supera el máximo permitido (${limites[k]} caracteres)`;
+      if (typeof v === 'object') { const r = revisar(v); if (r) return r; }
+    }
+    return null;
+  }
+  return revisar(campos);
+}
 
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('🟢 Conectado a MongoDB'))
@@ -362,8 +393,10 @@ app.delete('/partidos/:id', verificarToken, async (req, res) => {
   catch (e) { res.status(500).json({ mensaje: 'Error al eliminar partido' }); }
 });
 
-app.post('/inscripcion', async (req, res) => {
+app.post('/inscripcion', limiteRegistro, async (req, res) => {
   try {
+    const error = validarLongitudes(req.body);
+    if (error) return res.status(400).json({ mensaje: error });
     const nueva = new Inscripcion(req.body);
     await nueva.save();
     console.log('💾 Guardado en MongoDB');
@@ -399,9 +432,11 @@ app.get('/invitacion/:token', async (req, res) => {
   }
 });
 
-app.post('/ficha-temporada', async (req, res) => {
+app.post('/ficha-temporada', limiteRegistro, async (req, res) => {
   try {
     const { invitacionToken, ...datos } = req.body;
+    const errorLong = validarLongitudes(datos);
+    if (errorLong) return res.status(400).json({ mensaje: errorLong });
 
     if (invitacionToken) {
       const inv = await Invitacion.findOne({ token: invitacionToken });
