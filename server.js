@@ -127,6 +127,7 @@ const FichaTemporadaSchema = new mongoose.Schema({
   },
 
   nombre: { type: String, required: true },
+  apellido: String,
   direccion: String,
   ciudad: String,
   fechaNacimiento: String,
