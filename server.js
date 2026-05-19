@@ -572,9 +572,11 @@ app.post('/pagos', async (req, res) => {
 function promedioCategoria(obj) {
   if (!obj) return 0;
   const vals = Object.entries(obj)
-    .filter(([k, v]) => k !== 'promedio' && typeof v === 'number');
+    .filter(([k]) => k !== 'promedio')
+    .map(([, v]) => Number(v))
+    .filter(v => !isNaN(v));
   if (!vals.length) return 0;
-  return Math.round(vals.reduce((s, [, v]) => s + v, 0) / vals.length);
+  return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length);
 }
 
 app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
