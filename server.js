@@ -568,105 +568,72 @@ app.post('/pagos', async (req, res) => {
   }
 });
 
+/* Calcula el promedio de los valores numéricos de un objeto de sub-ítems */
+function promedioCategoria(obj) {
+  if (!obj) return 0;
+  const vals = Object.entries(obj)
+    .filter(([k, v]) => k !== 'promedio' && typeof v === 'number');
+  if (!vals.length) return 0;
+  return Math.round(vals.reduce((s, [, v]) => s + v, 0) / vals.length);
+}
+
 app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
   try {
-
-    const rendimientos = await Rendimiento.find({
-      jugadorId: req.params.jugadorId
-    })
-    .populate('profesorId', 'nombre apellido')
-    .sort({ fecha: -1 });
-
+    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId })
+      .sort({ fecha: -1 });
     res.json(rendimientos);
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al obtener rendimientos'
-    });
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener rendimientos' });
   }
 });
 
 app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => {
   try {
+    const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId });
+    if (!rendimientos.length) return res.json({ totalEvaluaciones: 0, promedioGeneral: 0 });
 
-    const rendimientos = await Rendimiento.find({
-      jugadorId: req.params.jugadorId
-    });
-
-    if (rendimientos.length === 0) {
-      return res.json({
-        promedioGeneral: 0
-      });
-    }
-
-    const promedioGeneral =
-      rendimientos.reduce((acc, item) => acc + item.promedio, 0)
-      / rendimientos.length;
+    const avg = (campo) =>
+      Math.round(rendimientos.reduce((s, r) => s + (r[campo]?.promedio || 0), 0) / rendimientos.length);
 
     res.json({
       totalEvaluaciones: rendimientos.length,
-      promedioGeneral: Number(promedioGeneral.toFixed(1))
+      fisico:      avg('fisico'),
+      tecnico:     avg('tecnico'),
+      actitudinal: avg('actitudinal'),
+      estrategico: avg('estrategico'),
+      promedioGeneral: Math.round(
+        rendimientos.reduce((s, r) => s + (r.promedioGeneral || 0), 0) / rendimientos.length
+      )
     });
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al obtener resumen'
-    });
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener resumen' });
   }
 });
 
 app.post('/rendimientos', verificarToken, async (req, res) => {
   try {
+    const { jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico, comentario } = req.body;
+    if (!jugadorId) return res.status(400).json({ mensaje: 'jugadorId es obligatorio' });
 
-    const {
-      jugadorId,
-      profesorId,
-      velocidad,
-      resistencia,
-      tecnica,
-      disciplina,
-      comentario
-    } = req.body;
+    // Calcular promedios de cada categoría
+    fisico.promedio      = promedioCategoria(fisico);
+    tecnico.promedio     = promedioCategoria(tecnico);
+    actitudinal.promedio = promedioCategoria(actitudinal);
+    estrategico.promedio = promedioCategoria(estrategico);
 
-    if (!jugadorId || !profesorId) {
-      return res.status(400).json({
-        mensaje: 'Jugador y profesor son obligatorios'
-      });
-    }
-
-    const promedio = (
-      velocidad +
-      resistencia +
-      tecnica +
-      disciplina
-    ) / 4;
+    const promedioGeneral = Math.round(
+      (fisico.promedio + tecnico.promedio + actitudinal.promedio + estrategico.promedio) / 4
+    );
 
     const rendimiento = await new Rendimiento({
-      jugadorId,
-      profesorId,
-      velocidad,
-      resistencia,
-      tecnica,
-      disciplina,
-      comentario,
-      promedio
+      jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico,
+      promedioGeneral, comentario
     }).save();
 
     res.status(201).json(rendimiento);
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al registrar rendimiento'
-    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al registrar rendimiento' });
   }
 });
 
@@ -1299,12 +1266,31 @@ app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
   try {
     const ficha = await FichaTemporada.findOne({ 'apoderado.correo': req.user.email });
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
-    const rendimientos = await Rendimiento.find({ jugadorId: ficha._id }).sort({ fecha: -1 });
+
+    const rendimientos = await Rendimiento.find({ jugadorId: ficha._id }).sort({ fecha: 1 });
     if (!rendimientos.length) return res.json({ promedio: null, historial: [] });
-    const avg = (campo) => +(rendimientos.reduce((s, r) => s + (r[campo] || 0), 0) / rendimientos.length).toFixed(1);
+
+    const avg = (campo) =>
+      Math.round(rendimientos.reduce((s, r) => s + (r[campo]?.promedio || 0), 0) / rendimientos.length);
+
     res.json({
-      promedio: { fisico: avg('fisico'), tecnico: avg('tecnico'), psicologico: avg('psicologico'), estrategico: avg('estrategico'), sesiones: rendimientos.length },
-      historial: rendimientos.slice(0, 10)
+      promedio: {
+        fisico:      avg('fisico'),
+        tecnico:     avg('tecnico'),
+        actitudinal: avg('actitudinal'),
+        estrategico: avg('estrategico'),
+        general:     Math.round(rendimientos.reduce((s, r) => s + (r.promedioGeneral || 0), 0) / rendimientos.length),
+        sesiones:    rendimientos.length
+      },
+      historial: rendimientos.map(r => ({
+        fecha:       r.fecha,
+        fisico:      r.fisico?.promedio || 0,
+        tecnico:     r.tecnico?.promedio || 0,
+        actitudinal: r.actitudinal?.promedio || 0,
+        estrategico: r.estrategico?.promedio || 0,
+        general:     r.promedioGeneral || 0,
+        comentario:  r.comentario
+      }))
     });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
 });
