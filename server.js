@@ -60,6 +60,9 @@ function sanitizarBody(obj) {
 }
 app.use((req, _res, next) => { if (req.body) sanitizarBody(req.body); next(); });
 
+/* Health-check público — responde sin tocar la BD, evita cold start */
+app.get('/ping', (_req, res) => res.json({ ok: true }));
+
 /* Rate limiting en endpoints públicos de registro */
 const limiteRegistro = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -452,6 +455,24 @@ app.post('/ficha-temporada', limiteRegistro, async (req, res) => {
       if (inv.expiraEn < new Date()) return res.status(410).json({ mensaje: 'Este link ha expirado' });
       inv.usado = true;
       await inv.save();
+    }
+
+    // Normalizar payload del registro-invitado (estructura pupilo/apoderado)
+    if (datos.pupilo) {
+      const p = datos.pupilo;
+      const a = datos.apoderado || {};
+      datos.nombre = [p.nombre, p.apellidoPaterno, p.apellidoMaterno].filter(Boolean).join(' ');
+      datos.cedula = p.rut;
+      datos.fechaNacimiento = p.fechaNacimiento;
+      datos.direccion = p.direccion;
+      datos.ciudad = p.comuna?.name ?? p.comuna ?? '';
+      datos.apoderado = {
+        nombre: [a.nombre, a.apellidos].filter(Boolean).join(' '),
+        correo: a.correo,
+        telefonoCasa: a.telefono,
+        whatsapp: a.telefono,
+      };
+      delete datos.pupilo;
     }
 
     datos.edad = calcularEdad(datos.fechaNacimiento);
