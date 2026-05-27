@@ -33,6 +33,11 @@ const jugadorSchema = new mongoose.Schema({
     default: '' 
   },
 
+  sede: {
+    type: String,
+    default: '' 
+  },
+
   fechaNacimiento: {
     type: Date,
     default: Date.now
