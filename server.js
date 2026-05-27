@@ -639,8 +639,11 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
   try {
     const { jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico, comentario } = req.body;
     if (!jugadorId) return res.status(400).json({ mensaje: 'jugadorId es obligatorio' });
+    if (!fisico || typeof fisico !== 'object') return res.status(400).json({ mensaje: 'fisico debe ser un objeto', recibido: typeof fisico });
+    if (!tecnico || typeof tecnico !== 'object') return res.status(400).json({ mensaje: 'tecnico debe ser un objeto' });
+    if (!actitudinal || typeof actitudinal !== 'object') return res.status(400).json({ mensaje: 'actitudinal debe ser un objeto' });
+    if (!estrategico || typeof estrategico !== 'object') return res.status(400).json({ mensaje: 'estrategico debe ser un objeto' });
 
-    // Calcular promedios de cada categoría
     fisico.promedio      = promedioCategoria(fisico);
     tecnico.promedio     = promedioCategoria(tecnico);
     actitudinal.promedio = promedioCategoria(actitudinal);
@@ -657,7 +660,7 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
 
     res.status(201).json(rendimiento);
   } catch (e) {
-    console.error(e);
+    console.error('POST /rendimientos error:', e.name, e.message);
     res.status(500).json({ mensaje: 'Error al registrar rendimiento', detalle: e.message, tipo: e.name });
   }
 });
