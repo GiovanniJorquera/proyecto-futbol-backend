@@ -127,6 +127,8 @@ const FichaTemporadaSchema = new mongoose.Schema({
   },
 
   nombre: { type: String, required: true },
+  apellidoPaterno: String,
+  apellidoMaterno: String,
   apellido: String,
   direccion: String,
   ciudad: String,
@@ -485,11 +487,15 @@ app.post('/ficha-temporada', limiteRegistro, async (req, res) => {
     if (datos.pupilo) {
       const p = datos.pupilo;
       const a = datos.apoderado || {};
-      datos.nombre = [p.nombre, p.apellidoPaterno, p.apellidoMaterno].filter(Boolean).join(' ');
+      datos.nombre = p.nombre || '';
+      datos.apellidoPaterno = p.apellidoPaterno || '';
+      datos.apellidoMaterno = p.apellidoMaterno || '';
+      datos.apellido = [p.apellidoPaterno, p.apellidoMaterno].filter(Boolean).join(' ');
       datos.cedula = p.rut;
       datos.fechaNacimiento = p.fechaNacimiento;
       datos.direccion = p.direccion;
       datos.ciudad = p.comuna?.name ?? p.comuna ?? '';
+      datos.sede = p.sede || '';
       datos.apoderado = {
         nombre: [a.nombre, a.apellidos].filter(Boolean).join(' '),
         correo: a.correo,
