@@ -640,33 +640,47 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
   try {
     const { jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico, comentario } = req.body;
     if (!jugadorId) return res.status(400).json({ mensaje: 'jugadorId es obligatorio' });
-    if (!fisico || typeof fisico !== 'object') return res.status(400).json({ mensaje: 'fisico debe ser un objeto', recibido: typeof fisico });
-    if (!tecnico || typeof tecnico !== 'object') return res.status(400).json({ mensaje: 'tecnico debe ser un objeto' });
-    if (!actitudinal || typeof actitudinal !== 'object') return res.status(400).json({ mensaje: 'actitudinal debe ser un objeto' });
-    if (!estrategico || typeof estrategico !== 'object') return res.status(400).json({ mensaje: 'estrategico debe ser un objeto' });
+    if (!mongoose.Types.ObjectId.isValid(jugadorId))
+      return res.status(400).json({ mensaje: 'jugadorId inválido' });
+    if (!fisico || typeof fisico !== 'object' || Array.isArray(fisico))
+      return res.status(400).json({ mensaje: 'fisico debe ser un objeto' });
+    if (!tecnico || typeof tecnico !== 'object' || Array.isArray(tecnico))
+      return res.status(400).json({ mensaje: 'tecnico debe ser un objeto' });
+    if (!actitudinal || typeof actitudinal !== 'object' || Array.isArray(actitudinal))
+      return res.status(400).json({ mensaje: 'actitudinal debe ser un objeto' });
+    if (!estrategico || typeof estrategico !== 'object' || Array.isArray(estrategico))
+      return res.status(400).json({ mensaje: 'estrategico debe ser un objeto' });
 
-    fisico.promedio      = promedioCategoria(fisico);
-    tecnico.promedio     = promedioCategoria(tecnico);
-    actitudinal.promedio = promedioCategoria(actitudinal);
-    estrategico.promedio = promedioCategoria(estrategico);
+    const fProm = promedioCategoria(fisico);
+    const tProm = promedioCategoria(tecnico);
+    const aProm = promedioCategoria(actitudinal);
+    const eProm = promedioCategoria(estrategico);
+    const promedioGeneral = Math.round((fProm + tProm + aProm + eProm) / 4);
+    const ahora = new Date();
 
-    const promedioGeneral = Math.round(
-      (fisico.promedio + tecnico.promedio + actitudinal.promedio + estrategico.promedio) / 4
-    );
+    const doc = {
+      jugadorId:   new mongoose.Types.ObjectId(jugadorId),
+      profesorId:  profesorId && mongoose.Types.ObjectId.isValid(profesorId)
+                     ? new mongoose.Types.ObjectId(profesorId) : null,
+      fecha:       ahora,
+      fisico:      { ...fisico, promedio: fProm },
+      tecnico:     { ...tecnico, promedio: tProm },
+      actitudinal: { ...actitudinal, promedio: aProm },
+      estrategico: { ...estrategico, promedio: eProm },
+      promedioGeneral,
+      comentario:  comentario || '',
+      createdAt:   ahora,
+      updatedAt:   ahora,
+    };
 
-    const rendimiento = await new Rendimiento({
-      jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico,
-      promedioGeneral, comentario
-    }).save({ validateBeforeSave: false });
-
-    res.status(201).json(rendimiento);
+    const result = await Rendimiento.collection.insertOne(doc);
+    res.status(201).json({ _id: result.insertedId, ...doc });
   } catch (e) {
-    console.error('POST /rendimientos error:', e.name, e.message, JSON.stringify(e.errors));
+    console.error('POST /rendimientos error:', e?.name, e?.message);
     res.status(500).json({
       mensaje: 'Error al registrar rendimiento',
-      detalle: e?.message || JSON.stringify(e),
+      detalle: e?.message || String(e),
       tipo: e?.name,
-      campos: e?.errors ? Object.keys(e.errors).map(k => `${k}: ${e.errors[k]?.message}`) : []
     });
   }
 });
