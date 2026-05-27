@@ -11,6 +11,7 @@ const SiteConfigSchema = new mongoose.Schema({
   imagenPopup:         { type: String, default: '' },
   tituloPopup:         { type: String, default: '' },
   cuerpoPopup:         { type: String, default: '' },
+  sedes:               { type: [String], default: ['Viña del Mar', 'Olmué'] },
 });
 
 module.exports = mongoose.model('SiteConfig', SiteConfigSchema);

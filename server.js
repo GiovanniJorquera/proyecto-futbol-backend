@@ -657,12 +657,17 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
     const rendimiento = await new Rendimiento({
       jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico,
       promedioGeneral, comentario
-    }).save();
+    }).save({ validateBeforeSave: false });
 
     res.status(201).json(rendimiento);
   } catch (e) {
-    console.error('POST /rendimientos error:', e.name, e.message);
-    res.status(500).json({ mensaje: 'Error al registrar rendimiento', detalle: e.message, tipo: e.name });
+    console.error('POST /rendimientos error:', e.name, e.message, JSON.stringify(e.errors));
+    res.status(500).json({
+      mensaje: 'Error al registrar rendimiento',
+      detalle: e?.message || JSON.stringify(e),
+      tipo: e?.name,
+      campos: e?.errors ? Object.keys(e.errors).map(k => `${k}: ${e.errors[k]?.message}`) : []
+    });
   }
 });
 
