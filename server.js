@@ -658,7 +658,7 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
     res.status(201).json(rendimiento);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ mensaje: 'Error al registrar rendimiento' });
+    res.status(500).json({ mensaje: 'Error al registrar rendimiento', detalle: e.message, tipo: e.name });
   }
 });
 
