@@ -1160,7 +1160,7 @@ function soloProfesor(req, res, next) {
 // Construye el filtro de fichas para un profesor (categoría + sede)
 function fichaQueryProfesor(prof) {
   const q = { categoria: { $in: prof.divisiones || [] } };
-  if (prof.sede) q.sede = prof.sede;
+  if (prof.sede) q.sede = { $regex: new RegExp(prof.sede, 'i') };
   return q;
 }
 
