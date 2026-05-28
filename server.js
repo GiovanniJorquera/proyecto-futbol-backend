@@ -1174,6 +1174,98 @@ app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) =
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener fichas' }); }
 });
 
+// Migración: convierte fichas con formato CSV-roto al esquema correcto
+app.post('/admin/migracion-fichas-csv', verificarToken, async (req, res) => {
+  try {
+    const fichas = await FichaTemporada.find({}).lean();
+    let migradas = 0;
+    const erroresList = [];
+
+    const limpiar = v => {
+      if (v === undefined || v === null) return '';
+      const t = String(v).trim();
+      return /^faltante$/i.test(t) || t === '0' ? '' : t;
+    };
+
+    const normalizarCategoria = v => {
+      if (!v) return '';
+      const m = v.trim().match(/^sub[-_\s]?(\d+)$/i);
+      return m ? `Sub-${m[1]}` : v.trim();
+    };
+
+    const parsearFecha = v => {
+      if (!v) return null;
+      // "2008-00-00" → usa solo el año con día 1 enero
+      const parts = v.split('-');
+      if (parts.length < 1) return null;
+      const y = parseInt(parts[0]);
+      if (isNaN(y) || y < 1980 || y > 2030) return null;
+      const m = parseInt(parts[1]) || 1;
+      const d = parseInt(parts[2]) || 1;
+      const fecha = new Date(y, (m < 1 ? 1 : m) - 1, d < 1 ? 1 : d);
+      return isNaN(fecha.getTime()) ? null : fecha;
+    };
+
+    for (const doc of fichas) {
+      // Detectar campo con formato CSV (clave contiene ';')
+      const csvKey = Object.keys(doc).find(k => k.includes(';'));
+      if (!csvKey) continue; // Documento ya tiene formato correcto
+
+      try {
+        const headers = csvKey.split(';').map(h => h.trim());
+        const rawVal  = String(doc[csvKey] || '');
+        // split por ';' respetando que puede haber espacios
+        const valores = rawVal.split(';');
+
+        const map = {};
+        headers.forEach((h, i) => { map[h] = limpiar(valores[i] || ''); });
+
+        const update = {
+          nombre:          map.nombre          || map.Nombre          || '',
+          apellidoPaterno: map.apellidoPaterno || map.ApellidoPaterno || '',
+          apellidoMaterno: map.apellidoMaterno || map.ApellidoMaterno || '',
+          categoria:       normalizarCategoria(map.categoria || map.Categoria || ''),
+          clubAmateur:     map.clubAmateur     || map.ClubAmateur     || '',
+          posicion:        map.posicion        || map.Posicion        || '',
+        };
+
+        // cedula / rut
+        const ced = map.cedula || map.rut || map.Cedula || map.Rut || '';
+        if (ced) update.cedula = ced;
+
+        // apellido combinado para compatibilidad
+        update.apellido = [update.apellidoPaterno, update.apellidoMaterno].filter(Boolean).join(' ');
+
+        // fecha de nacimiento
+        const fechaStr = map.fechaNacimiento || map.FechaNacimiento || '';
+        const fechaDate = parsearFecha(fechaStr);
+        if (fechaDate) {
+          update.fechaNacimiento = fechaDate;
+          update.edad = calcularEdad(fechaDate.toISOString());
+          if (!update.categoria) update.categoria = obtenerCategoria(fechaDate.toISOString());
+        }
+
+        // Usar updateOne directo para poder hacer $unset del campo roto
+        await FichaTemporada.collection.updateOne(
+          { _id: doc._id },
+          { $set: update, $unset: { [csvKey]: '' } }
+        );
+        migradas++;
+      } catch (eInner) {
+        erroresList.push({ id: doc._id, error: eInner.message });
+      }
+    }
+
+    res.json({
+      mensaje: `Migración completada: ${migradas} fichas convertidas.`,
+      errores: erroresList.length,
+      detalleErrores: erroresList
+    });
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error en migración', detalle: e.message });
+  }
+});
+
 // Helper: construye el apellido de display a partir de los campos disponibles
 function apellidoDisplay(f) {
   if (f.apellidoPaterno) {
