@@ -1284,10 +1284,10 @@ app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
     const inicio = new Date(anio, mesNum - 1, 1);
     const fin    = new Date(anio, mesNum,     1);
     const fichaQuery = categoria ? { categoria } : {};
-    // Ordenar por apellido combinado (siempre tiene valor) o por nombre
     const fichas = await FichaTemporada.find(fichaQuery).sort({ apellido: 1, nombre: 1 });
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
+    console.log('[LIBRO-ADMIN] fichas:', fichas.length, '| asistencias:', asistencias.length, '| rango:', inicio.toISOString(), '-', fin.toISOString());
     const isoFecha = d => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
     const fechas = [...new Set(asistencias.map(a => isoFecha(a.fecha)))].sort();
     const jugadores = fichas.map(f => {
@@ -1323,9 +1323,12 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
     const divisiones = usuario.profesorId.divisiones || [];
+    console.log('[LIBRO] divisiones:', divisiones);
     const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ apellido: 1, nombre: 1 });
+    console.log('[LIBRO] fichas encontradas:', fichas.length);
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
+    console.log('[LIBRO] asistencias encontradas:', asistencias.length, '| rango:', inicio.toISOString(), '-', fin.toISOString());
     const isoFecha = d => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
     const fechas = [...new Set(asistencias.map(a => isoFecha(a.fecha)))].sort();
     const jugadores = fichas.map(f => {
@@ -1533,6 +1536,25 @@ app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
     });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
 });
+
+// ── DIAGNÓSTICO TEMPORAL ──────────────────────────────────────────────────
+app.get('/debug/estado', async (req, res) => {
+  try {
+    const totalFichas      = await FichaTemporada.countDocuments();
+    const totalAsistencias = await Asistencia.countDocuments();
+    const ultimasAsistencias = await Asistencia.find().sort({ createdAt: -1 }).limit(5).lean();
+    const fichasMuestra = await FichaTemporada.find().limit(3).select('nombre apellidoPaterno apellido categoria').lean();
+    res.json({
+      totalFichas,
+      totalAsistencias,
+      fichasMuestra,
+      ultimasAsistencias
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
