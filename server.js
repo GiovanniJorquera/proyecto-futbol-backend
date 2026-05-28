@@ -1174,6 +1174,68 @@ app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) =
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener fichas' }); }
 });
 
+// Libro de asistencia — admin (todos los jugadores del mes, filtro opcional de categoría)
+app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
+  try {
+    const { mes, categoria } = req.query;
+    if (!mes || !/^\d{4}-\d{2}$/.test(mes))
+      return res.status(400).json({ mensaje: 'Parámetro mes requerido (formato YYYY-MM)' });
+    const [anio, mesNum] = mes.split('-').map(Number);
+    const inicio = new Date(anio, mesNum - 1, 1);
+    const fin    = new Date(anio, mesNum,     1);
+    const fichaQuery = categoria ? { categoria } : {};
+    const fichas = await FichaTemporada.find(fichaQuery).sort({ apellidoPaterno: 1, apellidoMaterno: 1, nombre: 1 });
+    const fichaIds = fichas.map(f => f._id);
+    const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
+    const isoFecha = d => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
+    const fechas = [...new Set(asistencias.map(a => isoFecha(a.fecha)))].sort();
+    const jugadores = fichas.map(f => {
+      const mis = asistencias.filter(a => a.jugadorId.toString() === f._id.toString());
+      const registros = {};
+      mis.forEach(a => { registros[isoFecha(a.fecha)] = a.estado; });
+      const asistio = mis.filter(a => a.estado === 'asistio').length;
+      const justificado = mis.filter(a => a.estado === 'justificado').length;
+      const ausente = mis.filter(a => a.estado === 'ausente').length;
+      const totalClases = fechas.length;
+      const porcentaje = totalClases > 0 ? Math.round((asistio + justificado) / totalClases * 100) : null;
+      return { _id: f._id, nombre: f.nombre, apellidoPaterno: f.apellidoPaterno || '', apellidoMaterno: f.apellidoMaterno || '', categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje };
+    });
+    res.json({ fechas, jugadores });
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener libro', detalle: e.message }); }
+});
+
+// Libro de asistencia — profesor (solo sus divisiones)
+app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req, res) => {
+  try {
+    const { mes } = req.query;
+    if (!mes || !/^\d{4}-\d{2}$/.test(mes))
+      return res.status(400).json({ mensaje: 'Parámetro mes requerido (formato YYYY-MM)' });
+    const [anio, mesNum] = mes.split('-').map(Number);
+    const inicio = new Date(anio, mesNum - 1, 1);
+    const fin    = new Date(anio, mesNum,     1);
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
+    const divisiones = usuario.profesorId.divisiones || [];
+    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ apellidoPaterno: 1, apellidoMaterno: 1, nombre: 1 });
+    const fichaIds = fichas.map(f => f._id);
+    const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
+    const isoFecha = d => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
+    const fechas = [...new Set(asistencias.map(a => isoFecha(a.fecha)))].sort();
+    const jugadores = fichas.map(f => {
+      const mis = asistencias.filter(a => a.jugadorId.toString() === f._id.toString());
+      const registros = {};
+      mis.forEach(a => { registros[isoFecha(a.fecha)] = a.estado; });
+      const asistio = mis.filter(a => a.estado === 'asistio').length;
+      const justificado = mis.filter(a => a.estado === 'justificado').length;
+      const ausente = mis.filter(a => a.estado === 'ausente').length;
+      const totalClases = fechas.length;
+      const porcentaje = totalClases > 0 ? Math.round((asistio + justificado) / totalClases * 100) : null;
+      return { _id: f._id, nombre: f.nombre, apellidoPaterno: f.apellidoPaterno || '', apellidoMaterno: f.apellidoMaterno || '', categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje };
+    });
+    res.json({ fechas, jugadores });
+  } catch (e) { res.status(500).json({ mensaje: 'Error al obtener libro', detalle: e.message }); }
+});
+
 app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) => {
   try {
     const { fecha } = req.query;
