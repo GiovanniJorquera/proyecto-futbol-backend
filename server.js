@@ -1174,6 +1174,14 @@ app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) =
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener fichas' }); }
 });
 
+// Helper: construye el apellido de display a partir de los campos disponibles
+function apellidoDisplay(f) {
+  if (f.apellidoPaterno) {
+    return f.apellidoMaterno ? `${f.apellidoPaterno} ${f.apellidoMaterno}` : f.apellidoPaterno;
+  }
+  return f.apellido || '';
+}
+
 // Libro de asistencia — admin (todos los jugadores del mes, filtro opcional de categoría)
 app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
   try {
@@ -1184,7 +1192,8 @@ app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
     const inicio = new Date(anio, mesNum - 1, 1);
     const fin    = new Date(anio, mesNum,     1);
     const fichaQuery = categoria ? { categoria } : {};
-    const fichas = await FichaTemporada.find(fichaQuery).sort({ apellidoPaterno: 1, apellidoMaterno: 1, nombre: 1 });
+    // Ordenar por apellido combinado (siempre tiene valor) o por nombre
+    const fichas = await FichaTemporada.find(fichaQuery).sort({ apellido: 1, nombre: 1 });
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
     const isoFecha = d => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
@@ -1198,7 +1207,13 @@ app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
       const ausente = mis.filter(a => a.estado === 'ausente').length;
       const totalClases = fechas.length;
       const porcentaje = totalClases > 0 ? Math.round((asistio + justificado) / totalClases * 100) : null;
-      return { _id: f._id, nombre: f.nombre, apellidoPaterno: f.apellidoPaterno || '', apellidoMaterno: f.apellidoMaterno || '', categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje };
+      return {
+        _id: f._id, nombre: f.nombre,
+        apellidoPaterno: f.apellidoPaterno || '',
+        apellidoMaterno: f.apellidoMaterno || '',
+        apellido: apellidoDisplay(f),
+        categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje
+      };
     });
     res.json({ fechas, jugadores });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener libro', detalle: e.message }); }
@@ -1216,7 +1231,7 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
     const divisiones = usuario.profesorId.divisiones || [];
-    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ apellidoPaterno: 1, apellidoMaterno: 1, nombre: 1 });
+    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ apellido: 1, nombre: 1 });
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
     const isoFecha = d => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
@@ -1230,7 +1245,13 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
       const ausente = mis.filter(a => a.estado === 'ausente').length;
       const totalClases = fechas.length;
       const porcentaje = totalClases > 0 ? Math.round((asistio + justificado) / totalClases * 100) : null;
-      return { _id: f._id, nombre: f.nombre, apellidoPaterno: f.apellidoPaterno || '', apellidoMaterno: f.apellidoMaterno || '', categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje };
+      return {
+        _id: f._id, nombre: f.nombre,
+        apellidoPaterno: f.apellidoPaterno || '',
+        apellidoMaterno: f.apellidoMaterno || '',
+        apellido: apellidoDisplay(f),
+        categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje
+      };
     });
     res.json({ fechas, jugadores });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener libro', detalle: e.message }); }
