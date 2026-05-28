@@ -701,6 +701,7 @@ app.post('/profesores/crear-acceso', verificarToken, async (req, res) => {
       especialidad,
       experiencia,
       divisiones,
+      sede,
       telefono
     } = req.body;
 
@@ -740,6 +741,7 @@ app.post('/profesores/crear-acceso', verificarToken, async (req, res) => {
       especialidad,
       experiencia,
       divisiones: Array.isArray(divisiones) ? divisiones : [],
+      sede: sede?.trim() || '',
       telefono,
       email,
       estadoSolicitud: 'aceptado',
@@ -1155,6 +1157,13 @@ function soloProfesor(req, res, next) {
   next();
 }
 
+// Construye el filtro de fichas para un profesor (categoría + sede)
+function fichaQueryProfesor(prof) {
+  const q = { categoria: { $in: prof.divisiones || [] } };
+  if (prof.sede) q.sede = prof.sede;
+  return q;
+}
+
 app.get('/profesor/mi-perfil', verificarToken, soloProfesor, async (req, res) => {
   try {
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
@@ -1167,9 +1176,9 @@ app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) =
   try {
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
-    const divisiones = usuario.profesorId.divisiones || [];
-    if (!divisiones.length) return res.json([]);
-    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ nombre: 1 });
+    const prof = usuario.profesorId;
+    if (!prof.divisiones?.length) return res.json([]);
+    const fichas = await FichaTemporada.find(fichaQueryProfesor(prof)).sort({ nombre: 1 });
     res.json(fichas);
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener fichas' }); }
 });
@@ -1322,9 +1331,9 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
     const fin    = new Date(anio, mesNum,     1);
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
-    const divisiones = usuario.profesorId.divisiones || [];
-    console.log('[LIBRO] divisiones:', divisiones);
-    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).sort({ apellido: 1, nombre: 1 });
+    const prof = usuario.profesorId;
+    console.log('[LIBRO] divisiones:', prof.divisiones, '| sede:', prof.sede);
+    const fichas = await FichaTemporada.find(fichaQueryProfesor(prof)).sort({ apellido: 1, nombre: 1 });
     console.log('[LIBRO] fichas encontradas:', fichas.length);
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
@@ -1357,8 +1366,7 @@ app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) 
     const { fecha } = req.query;
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
-    const divisiones = usuario.profesorId.divisiones || [];
-    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).select('_id');
+    const fichas = await FichaTemporada.find(fichaQueryProfesor(usuario.profesorId)).select('_id');
     const fichaIds = fichas.map(f => f._id);
     const filtro = { jugadorId: { $in: fichaIds } };
     if (fecha) {
@@ -1487,8 +1495,7 @@ app.get('/profesor/rendimiento', verificarToken, soloProfesor, async (req, res) 
   try {
     const { fecha } = req.query;
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
-    const divisiones = usuario?.profesorId?.divisiones || [];
-    const fichas = await FichaTemporada.find({ categoria: { $in: divisiones } }).select('_id');
+    const fichas = await FichaTemporada.find(fichaQueryProfesor(usuario?.profesorId || {})).select('_id');
     const fichaIds = fichas.map(f => f._id);
     const filtro = { jugadorId: { $in: fichaIds } };
     if (fecha) filtro.fecha = new Date(fecha);

@@ -9,6 +9,7 @@ const ProfesorSchema = new mongoose.Schema({
   especialidad: String,
   experiencia: String,
   divisiones: [String],
+  sede: String,
 
   telefono: String,
 
