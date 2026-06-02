@@ -297,7 +297,7 @@ app.post('/login', async (req, res) => {
     }
 
     const usuario = await UsuarioSistema.findOne({
-      email: user
+      email: { $regex: new RegExp(`^${user.toLowerCase().trim()}$`, 'i') }
     });
 
     if (!usuario) {
@@ -1112,11 +1112,23 @@ app.get('/cliente/mi-ficha', verificarToken, async (req, res) => {
   try {
     const email = req.user.email;
     if (!email) return res.status(400).json({ mensaje: 'Token sin email' });
-    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': email });
+    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': { $regex: new RegExp(`^${email}$`, 'i') } });
     if (!ficha) return res.status(404).json({ mensaje: 'No se encontró ficha asociada a este correo' });
     res.json(ficha);
   } catch (error) {
     res.status(500).json({ mensaje: 'Error al obtener ficha' });
+  }
+});
+
+// Devuelve TODAS las fichas del apoderado (por si tiene varios hijos registrados)
+app.get('/cliente/mis-fichas', verificarToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    if (!email) return res.status(400).json({ mensaje: 'Token sin email' });
+    const fichas = await FichaTemporada.find({ 'apoderado.correo': { $regex: new RegExp(`^${email}$`, 'i') } });
+    res.json(fichas);
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener fichas' });
   }
 });
 
@@ -1283,16 +1295,18 @@ function apellidoDisplay(f) {
   return f.apellido || '';
 }
 
-// Libro de asistencia — admin (todos los jugadores del mes, filtro opcional de categoría)
+// Libro de asistencia — admin (todos los jugadores del mes, filtro opcional de categoría y sede)
 app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
   try {
-    const { mes, categoria } = req.query;
+    const { mes, categoria, sede } = req.query;
     if (!mes || !/^\d{4}-\d{2}$/.test(mes))
       return res.status(400).json({ mensaje: 'Parámetro mes requerido (formato YYYY-MM)' });
     const [anio, mesNum] = mes.split('-').map(Number);
     const inicio = new Date(anio, mesNum - 1, 1);
     const fin    = new Date(anio, mesNum,     1);
-    const fichaQuery = categoria ? { categoria } : {};
+    const fichaQuery = {};
+    if (categoria) fichaQuery.categoria = categoria;
+    if (sede) fichaQuery.sede = { $regex: new RegExp(sede, 'i') };
     const fichas = await FichaTemporada.find(fichaQuery).sort({ apellido: 1, nombre: 1 });
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
@@ -1378,6 +1392,21 @@ app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) 
     const asistencias = await Asistencia.find(filtro);
     res.json(asistencias);
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener asistencias' }); }
+});
+
+// Editar una asistencia individual — admin
+app.put('/admin/asistencias/editar', verificarToken, async (req, res) => {
+  try {
+    const { jugadorId, fecha, estado } = req.body;
+    if (!jugadorId || !fecha || !estado) return res.status(400).json({ mensaje: 'jugadorId, fecha y estado son requeridos' });
+    const fechaNorm = new Date(`${fecha}T00:00:00`);
+    const asistencia = await Asistencia.findOneAndUpdate(
+      { jugadorId, fecha: fechaNorm },
+      { jugadorId, fecha: fechaNorm, estado },
+      { upsert: true, new: true }
+    );
+    res.json(asistencia);
+  } catch (e) { res.status(500).json({ mensaje: 'Error al editar asistencia', detalle: e.message }); }
 });
 
 app.post('/profesor/asistencias/lote', verificarToken, soloProfesor, async (req, res) => {
@@ -1513,7 +1542,13 @@ app.get('/admin/rendimiento/:jugadorId', verificarToken, async (req, res) => {
 
 app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
   try {
-    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': req.user.email });
+    let ficha;
+    if (req.query.fichaId) {
+      // Verificar que la ficha pertenece al apoderado
+      ficha = await FichaTemporada.findOne({ _id: req.query.fichaId, 'apoderado.correo': { $regex: new RegExp(`^${req.user.email}$`, 'i') } });
+    } else {
+      ficha = await FichaTemporada.findOne({ 'apoderado.correo': { $regex: new RegExp(`^${req.user.email}$`, 'i') } });
+    }
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
 
     const rendimientos = await Rendimiento.find({ jugadorId: ficha._id }).sort({ fecha: 1 });
