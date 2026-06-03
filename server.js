@@ -419,7 +419,7 @@ app.post('/partidos', verificarToken, async (req, res) => {
 });
 app.put('/partidos/:id', verificarToken, async (req, res) => {
   try {
-    const doc = await Partido.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const doc = await Partido.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
     if (!doc) return res.status(404).json({ mensaje: 'No encontrado' });
     res.json(doc);
   } catch (e) { res.status(500).json({ mensaje: 'Error al actualizar partido' }); }
@@ -562,7 +562,7 @@ app.put('/ficha-temporada/:id', verificarToken, async (req, res) => {
     if (typeof datos.numerosFavoritos === 'string') {
       datos.numerosFavoritos = datos.numerosFavoritos.split(',').map(n => Number(n.trim())).filter(n => !isNaN(n));
     }
-    const ficha = await FichaTemporada.findByIdAndUpdate(req.params.id, datos, { new: true, runValidators: false });
+    const ficha = await FichaTemporada.findByIdAndUpdate(req.params.id, datos, { returnDocument: 'after', runValidators: false });
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
     res.json(ficha);
   } catch (e) {
@@ -792,7 +792,7 @@ function crudRoutes(app, path, Model) {
   });
   app.put(`${path}/:id`, verificarToken, async (req, res) => {
     try {
-      const doc = await Model.findByIdAndUpdate(req.params.id, req.body, { new: true });
+      const doc = await Model.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
       if (!doc) return res.status(404).json({ mensaje: 'No encontrado' });
       res.json(doc);
     } catch (e) { res.status(500).json({ mensaje: 'Error al actualizar' }); }
@@ -829,7 +829,7 @@ app.post('/noticias', verificarToken, async (req, res) => {
 
 app.put('/noticias/:id', verificarToken, async (req, res) => {
   try {
-    const noticia = await Noticia.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const noticia = await Noticia.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
     if (!noticia) return res.status(404).json({ mensaje: 'Noticia no encontrada' });
     res.json(noticia);
   } catch (error) {
@@ -855,7 +855,7 @@ app.put('/config', verificarToken, async (req, res) => {
       config = await SiteConfig.findByIdAndUpdate(
         config._id,
         { $set: req.body },
-        { new: true, runValidators: false }
+        { returnDocument: 'after', runValidators: false }
       );
     }
     res.json(config);
@@ -896,7 +896,7 @@ app.patch('/pagos/:id/estado', verificarToken, async (req, res) => {
     const pagoActualizado = await Pago.findByIdAndUpdate(
       req.params.id,
       { estado },
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!pagoActualizado) {
@@ -922,7 +922,7 @@ app.patch('/pagos/:id/estado', verificarToken, async (req, res) => {
         await PagoMensual.findOneAndUpdate(
           { fichaId, mes, año },
           { estado: 'pagado', fechaPago: new Date(), observacion: 'Aprobado por voucher' },
-          { upsert: true, new: true }
+          { upsert: true, returnDocument: 'after' }
         );
       }
     }
@@ -1415,7 +1415,7 @@ app.put('/admin/asistencias/editar', verificarToken, async (req, res) => {
     const asistencia = await Asistencia.findOneAndUpdate(
       { jugadorId, fecha: fechaNorm },
       { jugadorId, fecha: fechaNorm, estado },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(asistencia);
   } catch (e) { res.status(500).json({ mensaje: 'Error al editar asistencia', detalle: e.message }); }
@@ -1436,7 +1436,7 @@ app.post('/profesor/asistencias/lote', verificarToken, soloProfesor, async (req,
       const asistencia = await Asistencia.findOneAndUpdate(
         { jugadorId, fecha: fechaNormalizada },
         { jugadorId, fecha: fechaNormalizada, estado, profesorId },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
       resultados.push(asistencia);
     }
@@ -1473,7 +1473,7 @@ app.post('/admin/vincular-pago-mensual/:pagoId', verificarToken, async (req, res
     const pagoMensual = await PagoMensual.findOneAndUpdate(
       { fichaId, mes, año },
       { estado: 'pagado', fechaPago: new Date(), observacion: 'Vinculado manualmente por admin' },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json({ mensaje: 'Pago mensual actualizado', pagoMensual });
   } catch (e) {
@@ -1490,7 +1490,7 @@ app.put('/admin/pago-mensual/:fichaId', verificarToken, async (req, res) => {
     const pago = await PagoMensual.findOneAndUpdate(
       { fichaId: req.params.fichaId, mes: hoy.getMonth() + 1, año: hoy.getFullYear() },
       { estado, observacion, fechaPago: estado === 'pagado' ? new Date() : undefined },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(pago);
   } catch (e) { res.status(500).json({ mensaje: 'Error al actualizar pago' }); }
@@ -1524,7 +1524,7 @@ app.post('/profesor/rendimiento', verificarToken, soloProfesor, async (req, res)
         { jugadorId: r.jugadorId, profesorEmail: req.user.email, fecha: fechaObj,
           fisico: r.fisico, tecnico: r.tecnico, psicologico: r.psicologico,
           estrategico: r.estrategico, notas: r.notas || '' },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
       resultados.push(rend);
     }
