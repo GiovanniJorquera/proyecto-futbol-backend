@@ -1332,7 +1332,7 @@ app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
         apellidoPaterno: f.apellidoPaterno || '',
         apellidoMaterno: f.apellidoMaterno || '',
         apellido: apellidoDisplay(f),
-        categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje
+        categoria: f.categoria, sede: f.sede || '', registros, totalClases, asistio, justificado, ausente, porcentaje
       };
     });
     res.json({ fechas, jugadores });
