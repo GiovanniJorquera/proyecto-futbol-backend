@@ -1322,17 +1322,19 @@ app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
       const mis = asistencias.filter(a => a.jugadorId.toString() === f._id.toString());
       const registros = {};
       mis.forEach(a => { registros[isoFecha(a.fecha)] = a.estado; });
-      const asistio = mis.filter(a => a.estado === 'asistio').length;
+      const asistio     = mis.filter(a => a.estado === 'asistio').length;
+      const licenciado  = mis.filter(a => a.estado === 'licenciado').length;
       const justificado = mis.filter(a => a.estado === 'justificado').length;
-      const ausente = mis.filter(a => a.estado === 'ausente').length;
+      const ausente     = mis.filter(a => a.estado === 'ausente').length;
       const totalClases = fechas.length;
-      const porcentaje = totalClases > 0 ? Math.round((asistio + justificado) / totalClases * 100) : null;
+      // P y L cuentan como asistido (100%). J y A cuentan como 0%.
+      const porcentaje = totalClases > 0 ? Math.round((asistio + licenciado) / totalClases * 100) : null;
       return {
         _id: f._id, nombre: f.nombre,
         apellidoPaterno: f.apellidoPaterno || '',
         apellidoMaterno: f.apellidoMaterno || '',
         apellido: apellidoDisplay(f),
-        categoria: f.categoria, sede: f.sede || '', registros, totalClases, asistio, justificado, ausente, porcentaje
+        categoria: f.categoria, sede: f.sede || '', registros, totalClases, asistio, licenciado, justificado, ausente, porcentaje
       };
     });
     res.json({ fechas, jugadores });
@@ -1365,17 +1367,18 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
       const mis = asistencias.filter(a => a.jugadorId.toString() === f._id.toString());
       const registros = {};
       mis.forEach(a => { registros[isoFecha(a.fecha)] = a.estado; });
-      const asistio = mis.filter(a => a.estado === 'asistio').length;
+      const asistio     = mis.filter(a => a.estado === 'asistio').length;
+      const licenciado  = mis.filter(a => a.estado === 'licenciado').length;
       const justificado = mis.filter(a => a.estado === 'justificado').length;
-      const ausente = mis.filter(a => a.estado === 'ausente').length;
+      const ausente     = mis.filter(a => a.estado === 'ausente').length;
       const totalClases = fechas.length;
-      const porcentaje = totalClases > 0 ? Math.round((asistio + justificado) / totalClases * 100) : null;
+      const porcentaje = totalClases > 0 ? Math.round((asistio + licenciado) / totalClases * 100) : null;
       return {
         _id: f._id, nombre: f.nombre,
         apellidoPaterno: f.apellidoPaterno || '',
         apellidoMaterno: f.apellidoMaterno || '',
         apellido: apellidoDisplay(f),
-        categoria: f.categoria, registros, totalClases, asistio, justificado, ausente, porcentaje
+        categoria: f.categoria, registros, totalClases, asistio, licenciado, justificado, ausente, porcentaje
       };
     });
     res.json({ fechas, jugadores });

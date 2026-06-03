@@ -14,7 +14,7 @@ const AsistenciaSchema = new mongoose.Schema({
 
   estado: {
     type: String,
-    enum: ['asistio', 'ausente', 'justificado'],
+    enum: ['asistio', 'ausente', 'justificado', 'licenciado'],
     default: 'asistio'
   },
 
