@@ -1170,9 +1170,13 @@ function soloProfesor(req, res, next) {
 }
 
 // Construye el filtro de fichas para un profesor (categoría + sede)
+// Usa regex case-insensitive para cada división para evitar problemas de mayúsculas/espacios
 function fichaQueryProfesor(prof) {
-  const q = { categoria: { $in: prof.divisiones || [] } };
-  if (prof.sede) q.sede = { $regex: new RegExp(prof.sede, 'i') };
+  const divs = (prof.divisiones || []).filter(Boolean);
+  if (!divs.length) return null; // sin divisiones → sin fichas
+  const regexDivs = divs.map(d => new RegExp(`^${d.trim()}$`, 'i'));
+  const q = { categoria: { $in: regexDivs } };
+  if (prof.sede) q.sede = { $regex: new RegExp(prof.sede.trim(), 'i') };
   return q;
 }
 
@@ -1189,8 +1193,9 @@ app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) =
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
     const prof = usuario.profesorId;
-    if (!prof.divisiones?.length) return res.json([]);
-    const fichas = await FichaTemporada.find(fichaQueryProfesor(prof)).sort({ nombre: 1 });
+    const query = fichaQueryProfesor(prof);
+    if (!query) return res.json([]);
+    const fichas = await FichaTemporada.find(query).sort({ nombre: 1 });
     res.json(fichas);
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener fichas' }); }
 });
@@ -1347,7 +1352,9 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
     const prof = usuario.profesorId;
     console.log('[LIBRO] divisiones:', prof.divisiones, '| sede:', prof.sede);
-    const fichas = await FichaTemporada.find(fichaQueryProfesor(prof)).sort({ apellido: 1, nombre: 1 });
+    const query = fichaQueryProfesor(prof);
+    if (!query) return res.json({ fechas: [], jugadores: [] });
+    const fichas = await FichaTemporada.find(query).sort({ apellido: 1, nombre: 1 });
     console.log('[LIBRO] fichas encontradas:', fichas.length);
     const fichaIds = fichas.map(f => f._id);
     const asistencias = await Asistencia.find({ jugadorId: { $in: fichaIds }, fecha: { $gte: inicio, $lt: fin } });
@@ -1380,7 +1387,9 @@ app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) 
     const { fecha } = req.query;
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
     if (!usuario?.profesorId) return res.status(404).json({ mensaje: 'Perfil no encontrado' });
-    const fichas = await FichaTemporada.find(fichaQueryProfesor(usuario.profesorId)).select('_id');
+    const query = fichaQueryProfesor(usuario.profesorId);
+    if (!query) return res.json([]);
+    const fichas = await FichaTemporada.find(query).select('_id');
     const fichaIds = fichas.map(f => f._id);
     const filtro = { jugadorId: { $in: fichaIds } };
     if (fecha) {
@@ -1524,7 +1533,9 @@ app.get('/profesor/rendimiento', verificarToken, soloProfesor, async (req, res) 
   try {
     const { fecha } = req.query;
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
-    const fichas = await FichaTemporada.find(fichaQueryProfesor(usuario?.profesorId || {})).select('_id');
+    const query = fichaQueryProfesor(usuario?.profesorId || {});
+    if (!query) return res.json([]);
+    const fichas = await FichaTemporada.find(query).select('_id');
     const fichaIds = fichas.map(f => f._id);
     const filtro = { jugadorId: { $in: fichaIds } };
     if (fecha) filtro.fecha = new Date(fecha);
