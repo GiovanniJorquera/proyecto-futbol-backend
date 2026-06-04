@@ -1492,15 +1492,17 @@ app.post('/admin/vincular-pago-mensual/:pagoId', verificarToken, async (req, res
     }
     if (!fichaId) return res.status(404).json({ mensaje: 'No se pudo identificar al jugador. Verifica que el RUT en el voucher coincida con el de la ficha.' });
 
-    const fechaPago = pago.fecha ? new Date(pago.fecha) : new Date();
-    const mes = fechaPago.getMonth() + 1;
-    const año = fechaPago.getFullYear();
+    // Usar MES ACTUAL para el registro (no la fecha del voucher, que puede ser de otro mes)
+    const hoy = new Date();
+    const mes = hoy.getMonth() + 1;
+    const año = hoy.getFullYear();
+
     const pagoMensual = await PagoMensual.findOneAndUpdate(
       { fichaId, mes, año },
       { estado: 'pagado', fechaPago: new Date(), observacion: 'Vinculado manualmente por admin' },
       { upsert: true, returnDocument: 'after' }
     );
-    res.json({ mensaje: 'Pago mensual actualizado', pagoMensual });
+    res.json({ mensaje: 'Pago mensual actualizado', mes, año, pagoMensual });
   } catch (e) {
     console.error(e);
     res.status(500).json({ mensaje: 'Error al vincular pago mensual' });
