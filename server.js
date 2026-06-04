@@ -1406,6 +1406,31 @@ app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) 
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener asistencias' }); }
 });
 
+// Normalizar sedes de fichastemporadas (VIÑA → Viña del Mar, OLMUÉ → Olmué, etc.)
+app.post('/admin/normalizar-sedes', verificarToken, async (req, res) => {
+  try {
+    const mapa = {
+      'viña': 'Viña del Mar',
+      'viña del mar': 'Viña del Mar',
+      'olmué': 'Olmué',
+      'olmue': 'Olmué',
+    };
+    const fichas = await FichaTemporada.find({ sede: { $exists: true } }).select('_id sede nombre').lean();
+    let actualizadas = 0;
+    const detalles = [];
+    for (const f of fichas) {
+      const key = (f.sede || '').trim().toLowerCase();
+      const nueva = mapa[key];
+      if (nueva && nueva !== f.sede) {
+        await FichaTemporada.updateOne({ _id: f._id }, { $set: { sede: nueva } });
+        detalles.push(`${f.nombre}: "${f.sede}" → "${nueva}"`);
+        actualizadas++;
+      }
+    }
+    res.json({ mensaje: `${actualizadas} fichas actualizadas`, detalles });
+  } catch (e) { res.status(500).json({ mensaje: 'Error al normalizar sedes', detalle: e.message }); }
+});
+
 // Editar una asistencia individual — admin
 app.put('/admin/asistencias/editar', verificarToken, async (req, res) => {
   try {
