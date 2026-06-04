@@ -44,8 +44,9 @@ const RendimientoSchema = new mongoose.Schema({
   tecnico:         subTecnico,
   actitudinal:     subActitudinal,
   estrategico:     subEstrategico,
-  promedioGeneral: Number,
-  comentario:      { type: String, default: '' }
+  promedioGeneral:    Number,
+  actitudAdversidad:  { type: String, default: '' },
+  comentario:         { type: String, default: '' }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Rendimiento', RendimientoSchema);
