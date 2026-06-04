@@ -13,8 +13,8 @@ const PagoSchema = new mongoose.Schema({
   },
   sede: {
     type: String,
-    enum: ['Sede 1', 'Sede 2'],
     required: true,
+    trim: true,
   },
   monto: {
     type: Number,
