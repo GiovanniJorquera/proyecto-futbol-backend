@@ -1530,9 +1530,21 @@ app.get('/cliente/mis-pagos-mensuales', verificarToken, async (req, res) => {
     const año = hoy.getFullYear();
     const pagos = await PagoMensual.find({ fichaId: ficha._id }).sort({ año: -1, mes: -1 }).limit(6);
     const pagoActual = pagos.find(p => p.mes === mes && p.año === año);
+
+    // Verificar si hay un voucher enviado este mes para este jugador
+    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const finMes    = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 1);
+    const voucherActivo = await Pago.findOne({
+      fichaId: ficha._id,
+      fechaRegistro: { $gte: inicioMes, $lt: finMes }
+    }).sort({ fechaRegistro: -1 });
+
     res.json({
       mesActual: { mes, año, estado: pagoActual?.estado || 'pendiente', monto: 20000 },
-      historial: pagos
+      historial: pagos,
+      voucherMesActual: voucherActivo
+        ? { existe: true, estado: voucherActivo.estado }
+        : { existe: false, estado: null }
     });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener pagos' }); }
 });
