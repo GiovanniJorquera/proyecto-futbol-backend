@@ -1,8 +1,9 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const Pago = require('./models/Pago');
 const Noticia = require('./models/Noticia');
 const SiteConfig = require('./models/SiteConfig');
@@ -41,8 +42,14 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 app.set('trust proxy', 1);
 
+const corsOrigin = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+  : true;
+if (corsOrigin === true) {
+  console.warn('⚠️  CORS_ORIGIN no está configurado — aceptando peticiones de cualquier origen. Define CORS_ORIGIN en producción (ej. https://tu-frontend.vercel.app).');
+}
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || true,
+  origin: corsOrigin,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -69,6 +76,15 @@ const limiteRegistro = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { mensaje: 'Demasiados intentos. Espera 15 minutos antes de volver a intentarlo.' }
+});
+
+/* Rate limiting en el login para evitar fuerza bruta */
+const limiteLogin = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { mensaje: 'Demasiados intentos de inicio de sesión. Espera 15 minutos antes de volver a intentarlo.' }
 });
 
 /* Valida longitud de campos de texto para evitar saturación */
@@ -251,19 +267,19 @@ function generarUsuario(nombre, apellido, dominio = 'nombredominio.cl') {
   return `${primerNombre}.${primerasTres}@${dominio}`;
 }
 
-function generarClaveTemporal(nombre, apellido, rut) {
-  const inicialNombre = nombre.trim()[0].toUpperCase();
-  const inicialApellido = apellido.trim()[0].toUpperCase();
-
-  const rutLimpio = rut.replace(/\./g, '').replace(/-/g, '');
-  const cuerpo = rutLimpio.slice(0, -1);
-  const ultimos4 = cuerpo.slice(-4);
-
-  return `${inicialNombre}${inicialApellido}.${ultimos4}`;
+/* Genera una contraseña temporal aleatoria seguras (no adivinable a partir de datos públicos) */
+function generarClaveTemporal() {
+  const alfabeto = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'; // sin 0/O/1/l/I para evitar confusión
+  let clave = '';
+  const bytes = crypto.randomBytes(10);
+  for (let i = 0; i < 10; i++) {
+    clave += alfabeto[bytes[i] % alfabeto.length];
+  }
+  return clave;
 }
 
 /* LOGIN */
-app.post('/login', async (req, res) => {
+app.post('/login', limiteLogin, async (req, res) => {
   try {
     const { user, password } = req.body;
 
@@ -273,10 +289,11 @@ app.post('/login', async (req, res) => {
       });
     }
 
-    if (
-      user === process.env.ADMIN_USER &&
-      password === process.env.ADMIN_PASSWORD
-    ) {
+    const adminValido = process.env.ADMIN_PASSWORD_HASH
+      ? (user === process.env.ADMIN_USER && await bcrypt.compare(password, process.env.ADMIN_PASSWORD_HASH))
+      : (user === process.env.ADMIN_USER && password === process.env.ADMIN_PASSWORD);
+
+    if (adminValido) {
       const token = jwt.sign(
         {
           user,
@@ -353,6 +370,35 @@ app.post('/login', async (req, res) => {
   }
 });
 
+/* CAMBIAR CONTRASEÑA (profesor / cliente) */
+app.post('/cambiar-password', verificarToken, async (req, res) => {
+  try {
+    if (req.user.rol === 'admin') {
+      return res.status(400).json({ mensaje: 'La cuenta admin no soporta cambio de contraseña desde aquí' });
+    }
+    const { passwordActual, passwordNueva } = req.body;
+    if (!passwordActual || !passwordNueva) {
+      return res.status(400).json({ mensaje: 'La contraseña actual y la nueva son obligatorias' });
+    }
+    if (passwordNueva.length < 8) {
+      return res.status(400).json({ mensaje: 'La nueva contraseña debe tener al menos 8 caracteres' });
+    }
+    const usuario = await UsuarioSistema.findById(req.user.id);
+    if (!usuario) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+
+    const valida = await bcrypt.compare(passwordActual, usuario.passwordHash);
+    if (!valida) return res.status(401).json({ mensaje: 'La contraseña actual es incorrecta' });
+
+    usuario.passwordHash = await bcrypt.hash(passwordNueva, 10);
+    usuario.debeCambiarPassword = false;
+    await usuario.save();
+
+    res.json({ mensaje: 'Contraseña actualizada correctamente' });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al cambiar la contraseña' });
+  }
+});
+
 /* MIDDLEWARE: verificar token */
 function verificarToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -369,6 +415,12 @@ function verificarToken(req, res, next) {
     req.user = decoded;
     next();
   });
+}
+
+/* MIDDLEWARE: solo administrador */
+function soloAdmin(req, res, next) {
+  if (req.user.rol !== 'admin') return res.status(403).json({ mensaje: 'Acceso solo para administradores' });
+  next();
 }
 
 /* RUTAS PÚBLICAS */
@@ -413,18 +465,18 @@ app.get('/partidos', async (req, res) => {
     res.status(500).json({ mensaje: 'Error al obtener partidos' });
   }
 });
-app.post('/partidos', verificarToken, async (req, res) => {
+app.post('/partidos', verificarToken, soloAdmin, async (req, res) => {
   try { res.status(201).json(await new Partido(req.body).save()); }
   catch (e) { res.status(500).json({ mensaje: 'Error al crear partido' }); }
 });
-app.put('/partidos/:id', verificarToken, async (req, res) => {
+app.put('/partidos/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     const doc = await Partido.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
     if (!doc) return res.status(404).json({ mensaje: 'No encontrado' });
     res.json(doc);
   } catch (e) { res.status(500).json({ mensaje: 'Error al actualizar partido' }); }
 });
-app.delete('/partidos/:id', verificarToken, async (req, res) => {
+app.delete('/partidos/:id', verificarToken, soloAdmin, async (req, res) => {
   try { await Partido.findByIdAndDelete(req.params.id); res.json({ mensaje: 'Eliminado' }); }
   catch (e) { res.status(500).json({ mensaje: 'Error al eliminar partido' }); }
 });
@@ -444,9 +496,8 @@ app.post('/inscripcion', limiteRegistro, async (req, res) => {
 });
 
 /* INVITACIONES - link temporal de registro */
-app.post('/admin/generar-invitacion', verificarToken, async (req, res) => {
+app.post('/admin/generar-invitacion', verificarToken, soloAdmin, async (req, res) => {
   try {
-    const crypto = require('crypto');
     const token = crypto.randomBytes(24).toString('hex');
     const expiraEn = new Date(Date.now() + 48 * 60 * 60 * 1000);
     await Invitacion.create({ token, expiraEn });
@@ -530,7 +581,7 @@ app.post('/ficha-temporada', limiteRegistro, async (req, res) => {
   }
 });
 
-app.get('/ficha-temporada', verificarToken, async (req, res) => {
+app.get('/ficha-temporada', verificarToken, soloAdmin, async (req, res) => {
   try {
     const fichas = await FichaTemporada.find().sort({ categoria: 1, nombre: 1 });
     const clientes = await UsuarioSistema.find({ rol: 'cliente' }).select('email');
@@ -552,7 +603,7 @@ app.get('/ficha-temporada', verificarToken, async (req, res) => {
   }
 });
 
-app.put('/ficha-temporada/:id', verificarToken, async (req, res) => {
+app.put('/ficha-temporada/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     const datos = req.body;
     if (datos.fechaNacimiento) {
@@ -571,7 +622,7 @@ app.put('/ficha-temporada/:id', verificarToken, async (req, res) => {
   }
 });
 
-app.delete('/ficha-temporada/:id', verificarToken, async (req, res) => {
+app.delete('/ficha-temporada/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     const ficha = await FichaTemporada.findById(req.params.id);
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
@@ -609,8 +660,12 @@ function promedioCategoria(obj) {
   return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length);
 }
 
-app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => {
+app.get('/rendimientos/resumen/:jugadorId', verificarToken, soloProfesor, async (req, res) => {
   try {
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    const permitido = usuario?.profesorId && await jugadorPerteneceAProfesor(req.params.jugadorId, usuario.profesorId);
+    if (!permitido) return res.status(403).json({ mensaje: 'No tienes acceso a este jugador' });
+
     const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId });
     if (!rendimientos.length) return res.json({ totalEvaluaciones: 0, promedioGeneral: 0 });
 
@@ -632,8 +687,12 @@ app.get('/rendimientos/resumen/:jugadorId', verificarToken, async (req, res) => 
   }
 });
 
-app.get('/rendimientos/:jugadorId', verificarToken, async (req, res) => {
+app.get('/rendimientos/:jugadorId', verificarToken, soloProfesor, async (req, res) => {
   try {
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    const permitido = usuario?.profesorId && await jugadorPerteneceAProfesor(req.params.jugadorId, usuario.profesorId);
+    if (!permitido) return res.status(403).json({ mensaje: 'No tienes acceso a este jugador' });
+
     const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId })
       .sort({ fecha: -1 });
     res.json(rendimientos);
@@ -691,7 +750,7 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
   }
 });
 
-app.post('/profesores/crear-acceso', verificarToken, async (req, res) => {
+app.post('/profesores/crear-acceso', verificarToken, soloAdmin, async (req, res) => {
   try {
     let {
       nombre,
@@ -716,7 +775,7 @@ app.post('/profesores/crear-acceso', verificarToken, async (req, res) => {
     }
 
     const email = generarUsuario(nombre, apellido);
-    const passwordTemporal = generarClaveTemporal(nombre, apellido, rut);
+    const passwordTemporal = generarClaveTemporal();
 
     const existeUsuario = await UsuarioSistema.findOne({ email });
 
@@ -781,43 +840,43 @@ app.post('/profesores/crear-acceso', verificarToken, async (req, res) => {
 
 /* RUTAS PROTEGIDAS (requieren token) */
 
-function crudRoutes(app, path, Model) {
-  app.get(path, verificarToken, async (req, res) => {
+function crudRoutes(app, path, Model, middlewares = []) {
+  app.get(path, verificarToken, ...middlewares, async (req, res) => {
     try { res.json(await Model.find().sort({ createdAt: -1 })); }
     catch (e) { res.status(500).json({ mensaje: 'Error al obtener datos' }); }
   });
-  app.post(path, verificarToken, async (req, res) => {
+  app.post(path, verificarToken, ...middlewares, async (req, res) => {
     try { res.status(201).json(await new Model(req.body).save()); }
     catch (e) { res.status(500).json({ mensaje: 'Error al crear' }); }
   });
-  app.put(`${path}/:id`, verificarToken, async (req, res) => {
+  app.put(`${path}/:id`, verificarToken, ...middlewares, async (req, res) => {
     try {
       const doc = await Model.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
       if (!doc) return res.status(404).json({ mensaje: 'No encontrado' });
       res.json(doc);
     } catch (e) { res.status(500).json({ mensaje: 'Error al actualizar' }); }
   });
-  app.delete(`${path}/:id`, verificarToken, async (req, res) => {
+  app.delete(`${path}/:id`, verificarToken, ...middlewares, async (req, res) => {
     try { await Model.findByIdAndDelete(req.params.id); res.json({ mensaje: 'Eliminado' }); }
     catch (e) { res.status(500).json({ mensaje: 'Error al eliminar' }); }
   });
 }
 
-crudRoutes(app, '/estudiantes', Estudiante);
+crudRoutes(app, '/estudiantes', Estudiante, [soloAdmin]);
 
 /* DIVISIONES: solo lectura (protegido contra creación) */
-app.get('/divisiones', verificarToken, async (req, res) => {
-  try { 
-    res.json(await Division.find().sort({ createdAt: -1 })); 
+app.get('/divisiones', verificarToken, soloAdmin, async (req, res) => {
+  try {
+    res.json(await Division.find().sort({ createdAt: -1 }));
   }
-  catch (e) { 
-    res.status(500).json({ mensaje: 'Error al obtener divisiones' }); 
+  catch (e) {
+    res.status(500).json({ mensaje: 'Error al obtener divisiones' });
   }
 });
 
-crudRoutes(app, '/profesores', Profesor);
+crudRoutes(app, '/profesores', Profesor, [soloAdmin]);
 
-app.post('/noticias', verificarToken, async (req, res) => {
+app.post('/noticias', verificarToken, soloAdmin, async (req, res) => {
   try {
     const noticia = new Noticia(req.body);
     await noticia.save();
@@ -827,7 +886,7 @@ app.post('/noticias', verificarToken, async (req, res) => {
   }
 });
 
-app.put('/noticias/:id', verificarToken, async (req, res) => {
+app.put('/noticias/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     const noticia = await Noticia.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
     if (!noticia) return res.status(404).json({ mensaje: 'Noticia no encontrada' });
@@ -837,7 +896,7 @@ app.put('/noticias/:id', verificarToken, async (req, res) => {
   }
 });
 
-app.delete('/noticias/:id', verificarToken, async (req, res) => {
+app.delete('/noticias/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     await Noticia.findByIdAndDelete(req.params.id);
     res.json({ mensaje: 'Noticia eliminada' });
@@ -846,7 +905,7 @@ app.delete('/noticias/:id', verificarToken, async (req, res) => {
   }
 });
 
-app.put('/config', verificarToken, async (req, res) => {
+app.put('/config', verificarToken, soloAdmin, async (req, res) => {
   try {
     let config = await SiteConfig.findOne();
     if (!config) {
@@ -864,7 +923,7 @@ app.put('/config', verificarToken, async (req, res) => {
     res.status(500).json({ mensaje: 'Error al guardar configuración', detalle: error.message });
   }
 });
-app.get('/pagos', verificarToken, async (req, res) => {
+app.get('/pagos', verificarToken, soloAdmin, async (req, res) => {
   try {
     const filtro = {};
     if (req.query.estado) filtro.estado = req.query.estado;
@@ -875,7 +934,7 @@ app.get('/pagos', verificarToken, async (req, res) => {
   }
 });
 
-app.get('/pagos/:id', verificarToken, async (req, res) => {
+app.get('/pagos/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     const pago = await Pago.findById(req.params.id);
     if (!pago) return res.status(404).json({ mensaje: 'Pago no encontrado' });
@@ -885,7 +944,7 @@ app.get('/pagos/:id', verificarToken, async (req, res) => {
   }
 });
 
-app.patch('/pagos/:id/estado', verificarToken, async (req, res) => {
+app.patch('/pagos/:id/estado', verificarToken, soloAdmin, async (req, res) => {
   try {
     const { estado } = req.body;
 
@@ -934,7 +993,7 @@ app.patch('/pagos/:id/estado', verificarToken, async (req, res) => {
   }
 });
 
-app.get('/inscripciones', verificarToken, async (req, res) => {
+app.get('/inscripciones', verificarToken, soloAdmin, async (req, res) => {
   try {
     const data = await Inscripcion.find().sort({ fechaRegistro: -1 });
     res.json(data);
@@ -943,7 +1002,7 @@ app.get('/inscripciones', verificarToken, async (req, res) => {
   }
 });
 
-app.put('/aprobar/:id', verificarToken, async (req, res) => {
+app.put('/aprobar/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     const inscripcion = await Inscripcion.findById(req.params.id);
 
@@ -961,16 +1020,11 @@ app.put('/aprobar/:id', verificarToken, async (req, res) => {
 
     const nombreApoderado = inscripcion.apoderado.nombre?.trim();
     const apellidos = inscripcion.apoderado.apellidos?.trim() || '';
-    const rutPupilo = inscripcion.pupilo.rut?.trim();
 
     const apellidoPrincipal = apellidos.split(' ')[0] || 'user';
 
     const email = generarUsuario(nombreApoderado, apellidoPrincipal);
-    const passwordTemporal = generarClaveTemporal(
-      nombreApoderado,
-      apellidoPrincipal,
-      rutPupilo
-    );
+    const passwordTemporal = generarClaveTemporal();
 
     const existeUsuario = await UsuarioSistema.findOne({ email });
 
@@ -1008,7 +1062,7 @@ app.put('/aprobar/:id', verificarToken, async (req, res) => {
   }
 });
 
-app.put('/rechazar/:id', verificarToken, async (req, res) => {
+app.put('/rechazar/:id', verificarToken, soloAdmin, async (req, res) => {
   try {
     await Inscripcion.findByIdAndUpdate(req.params.id, { estado: 'rechazado' });
     res.json({ mensaje: 'Rechazado' });
@@ -1132,7 +1186,7 @@ app.get('/cliente/mis-fichas', verificarToken, async (req, res) => {
   }
 });
 
-app.post('/admin/crear-cliente-ficha/:fichaId', verificarToken, async (req, res) => {
+app.post('/admin/crear-cliente-ficha/:fichaId', verificarToken, soloAdmin, async (req, res) => {
   try {
     const ficha = await FichaTemporada.findById(req.params.fichaId);
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
@@ -1143,7 +1197,7 @@ app.post('/admin/crear-cliente-ficha/:fichaId', verificarToken, async (req, res)
     const existe = await UsuarioSistema.findOne({ email });
     if (existe) return res.status(400).json({ mensaje: 'Ya existe una cuenta con ese correo' });
 
-    const passwordTemporal = generarClaveTemporal(ficha.nombre, ficha.nombre.split(' ')[1] || ficha.nombre, ficha.cedula || '0000-0');
+    const passwordTemporal = generarClaveTemporal();
     const passwordHash = await bcrypt.hash(passwordTemporal, 10);
 
     await new UsuarioSistema({
@@ -1180,6 +1234,15 @@ function fichaQueryProfesor(prof) {
   return q;
 }
 
+// Verifica que un jugador esté dentro de las divisiones/sede asignadas al profesor
+async function jugadorPerteneceAProfesor(jugadorId, prof) {
+  if (!mongoose.Types.ObjectId.isValid(jugadorId)) return false;
+  const query = fichaQueryProfesor(prof);
+  if (!query) return false;
+  const ficha = await FichaTemporada.findOne({ _id: jugadorId, ...query }).select('_id');
+  return !!ficha;
+}
+
 app.get('/profesor/mi-perfil', verificarToken, soloProfesor, async (req, res) => {
   try {
     const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
@@ -1201,7 +1264,7 @@ app.get('/profesor/mis-fichas', verificarToken, soloProfesor, async (req, res) =
 });
 
 // Migración: convierte fichas con formato CSV-roto al esquema correcto
-app.post('/admin/migracion-fichas-csv', verificarToken, async (req, res) => {
+app.post('/admin/migracion-fichas-csv', verificarToken, soloAdmin, async (req, res) => {
   try {
     const fichas = await FichaTemporada.find({}).lean();
     let migradas = 0;
@@ -1301,7 +1364,7 @@ function apellidoDisplay(f) {
 }
 
 // Libro de asistencia — admin (todos los jugadores del mes, filtro opcional de categoría y sede)
-app.get('/admin/asistencias/libro', verificarToken, async (req, res) => {
+app.get('/admin/asistencias/libro', verificarToken, soloAdmin, async (req, res) => {
   try {
     const { mes, categoria, sede } = req.query;
     if (!mes || !/^\d{4}-\d{2}$/.test(mes))
@@ -1407,7 +1470,7 @@ app.get('/profesor/asistencias', verificarToken, soloProfesor, async (req, res) 
 });
 
 // Normalizar sedes de fichastemporadas (VIÑA → Viña del Mar, OLMUÉ → Olmué, etc.)
-app.post('/admin/normalizar-sedes', verificarToken, async (req, res) => {
+app.post('/admin/normalizar-sedes', verificarToken, soloAdmin, async (req, res) => {
   try {
     const mapa = {
       'viña': 'Viña del Mar',
@@ -1432,7 +1495,7 @@ app.post('/admin/normalizar-sedes', verificarToken, async (req, res) => {
 });
 
 // Editar una asistencia individual — admin
-app.put('/admin/asistencias/editar', verificarToken, async (req, res) => {
+app.put('/admin/asistencias/editar', verificarToken, soloAdmin, async (req, res) => {
   try {
     const { jugadorId, fecha, estado } = req.body;
     if (!jugadorId || !fecha || !estado) return res.status(400).json({ mensaje: 'jugadorId, fecha y estado son requeridos' });
@@ -1473,7 +1536,7 @@ app.post('/profesor/asistencias/lote', verificarToken, soloProfesor, async (req,
 });
 
 /* ── VINCULAR PAGO APROBADO → PAGO MENSUAL (retroactivo) ── */
-app.post('/admin/vincular-pago-mensual/:pagoId', verificarToken, async (req, res) => {
+app.post('/admin/vincular-pago-mensual/:pagoId', verificarToken, soloAdmin, async (req, res) => {
   try {
     const pago = await Pago.findById(req.params.pagoId);
     if (!pago) return res.status(404).json({ mensaje: 'Pago no encontrado' });
@@ -1510,7 +1573,7 @@ app.post('/admin/vincular-pago-mensual/:pagoId', verificarToken, async (req, res
 });
 
 /* ── PAGOS MENSUALES ────────────────────────────── */
-app.put('/admin/pago-mensual/:fichaId', verificarToken, async (req, res) => {
+app.put('/admin/pago-mensual/:fichaId', verificarToken, soloAdmin, async (req, res) => {
   try {
     const { estado, observacion } = req.body;
     const hoy = new Date();
@@ -1586,7 +1649,7 @@ app.get('/profesor/rendimiento', verificarToken, soloProfesor, async (req, res) 
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
 });
 
-app.get('/admin/rendimiento/:jugadorId', verificarToken, async (req, res) => {
+app.get('/admin/rendimiento/:jugadorId', verificarToken, soloAdmin, async (req, res) => {
   try {
     const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId }).sort({ fecha: -1 }).limit(20);
     res.json(rendimientos);
@@ -1631,25 +1694,6 @@ app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
     });
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
 });
-
-// ── DIAGNÓSTICO TEMPORAL ──────────────────────────────────────────────────
-app.get('/debug/estado', async (req, res) => {
-  try {
-    const totalFichas      = await FichaTemporada.countDocuments();
-    const totalAsistencias = await Asistencia.countDocuments();
-    const ultimasAsistencias = await Asistencia.find().sort({ createdAt: -1 }).limit(5).lean();
-    const fichasMuestra = await FichaTemporada.find().limit(3).select('nombre apellidoPaterno apellido categoria').lean();
-    res.json({
-      totalFichas,
-      totalAsistencias,
-      fichasMuestra,
-      ultimasAsistencias
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-// ─────────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
