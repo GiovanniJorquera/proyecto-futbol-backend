@@ -187,7 +187,7 @@ const FichaTemporadaSchema = new mongoose.Schema({
   },
 });
 
-const FichaTemporada = mongoose.model('FichaTemporada', FichaTemporadaSchema);
+const FichaTemporada = mongoose.model('FichaTemporada', FichaTemporadaSchema, 'fichastemporadas');
 
 const PagoMensualSchema = new mongoose.Schema({
   fichaId: { type: mongoose.Schema.Types.ObjectId, required: true },
