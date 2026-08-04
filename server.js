@@ -158,6 +158,8 @@ const FichaTemporadaSchema = new mongoose.Schema({
   establecimiento: String,
   curso: String,
   clubAmateur: String,
+  equipoPreferido: String,
+  jugadorReferente: String,
   talla: String,
 
   numerosFavoritos: [Number],
@@ -1654,6 +1656,39 @@ app.get('/admin/rendimiento/:jugadorId', verificarToken, soloAdmin, async (req, 
     const rendimientos = await Rendimiento.find({ jugadorId: req.params.jugadorId }).sort({ fecha: -1 }).limit(20);
     res.json(rendimientos);
   } catch (e) { res.status(500).json({ mensaje: 'Error al obtener rendimiento' }); }
+});
+
+app.put('/admin/rendimiento/:id', verificarToken, soloAdmin, async (req, res) => {
+  try {
+    const { fisico, tecnico, actitudinal, estrategico, comentario, actitudAdversidad } = req.body;
+    if (!fisico || !tecnico || !actitudinal || !estrategico) {
+      return res.status(400).json({ mensaje: 'fisico, tecnico, actitudinal y estrategico son obligatorios' });
+    }
+
+    const fProm = promedioCategoria(fisico);
+    const tProm = promedioCategoria(tecnico);
+    const aProm = promedioCategoria(actitudinal);
+    const eProm = promedioCategoria(estrategico);
+    const promedioGeneral = Math.round((fProm + tProm + aProm + eProm) / 4);
+
+    const rendimiento = await Rendimiento.findByIdAndUpdate(
+      req.params.id,
+      {
+        fisico: { ...fisico, promedio: fProm },
+        tecnico: { ...tecnico, promedio: tProm },
+        actitudinal: { ...actitudinal, promedio: aProm },
+        estrategico: { ...estrategico, promedio: eProm },
+        promedioGeneral,
+        comentario: comentario || '',
+        actitudAdversidad: actitudAdversidad || '',
+      },
+      { returnDocument: 'after', runValidators: false }
+    );
+    if (!rendimiento) return res.status(404).json({ mensaje: 'Rendimiento no encontrado' });
+    res.json(rendimiento);
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error al editar rendimiento' });
+  }
 });
 
 app.get('/cliente/mi-rendimiento', verificarToken, async (req, res) => {
