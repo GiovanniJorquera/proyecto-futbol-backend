@@ -1590,7 +1590,11 @@ app.put('/admin/pago-mensual/:fichaId', verificarToken, soloAdmin, async (req, r
 
 app.get('/cliente/mis-pagos-mensuales', verificarToken, async (req, res) => {
   try {
-    const ficha = await FichaTemporada.findOne({ 'apoderado.correo': req.user.email });
+    const { fichaId } = req.query;
+    const query = fichaId
+      ? { _id: fichaId, 'apoderado.correo': { $regex: new RegExp(`^${req.user.email}$`, 'i') } }
+      : { 'apoderado.correo': { $regex: new RegExp(`^${req.user.email}$`, 'i') } };
+    const ficha = await FichaTemporada.findOne(query);
     if (!ficha) return res.status(404).json({ mensaje: 'Ficha no encontrada' });
     const hoy = new Date();
     const mes = hoy.getMonth() + 1;
