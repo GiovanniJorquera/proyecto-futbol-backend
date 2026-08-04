@@ -1443,7 +1443,7 @@ app.get('/profesor/asistencias/libro', verificarToken, soloProfesor, async (req,
         apellidoPaterno: f.apellidoPaterno || '',
         apellidoMaterno: f.apellidoMaterno || '',
         apellido: apellidoDisplay(f),
-        categoria: f.categoria, registros, totalClases, asistio, licenciado, justificado, ausente, porcentaje
+        categoria: f.categoria, sede: f.sede, registros, totalClases, asistio, licenciado, justificado, ausente, porcentaje
       };
     });
     res.json({ fechas, jugadores });
