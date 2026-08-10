@@ -26,8 +26,8 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-if (!process.env.ADMIN_USER || !process.env.ADMIN_PASSWORD) {
-  console.error('❌ Falta ADMIN_USER o ADMIN_PASSWORD en las variables de entorno');
+if (!process.env.ADMIN_USER || !(process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD_HASH)) {
+  console.error('❌ Falta ADMIN_USER o ADMIN_PASSWORD/ADMIN_PASSWORD_HASH en las variables de entorno');
   process.exit(1);
 }
 
@@ -448,16 +448,6 @@ app.get('/config', async (req, res) => {
   }
 });
 
-/* Planteles público (profesores sin auth para página de inicio) */
-app.get('/planteles', async (req, res) => {
-  try {
-    const data = await Profesor.find().sort({ createdAt: -1 });
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ mensaje: 'Error al obtener planteles' });
-  }
-});
-
 /* Partidos (GET público, resto protegido) */
 app.get('/partidos', async (req, res) => {
   try {
@@ -650,9 +640,23 @@ app.delete('/ficha-temporada/:id', verificarToken, soloAdmin, async (req, res) =
   }
 });
 
-app.post('/pagos', async (req, res) => {
+app.post('/pagos', verificarToken, limiteRegistro, async (req, res) => {
   try {
-    const nuevoPago = new Pago(req.body);
+    const { apoderado, alumno, sede, monto, fecha, voucherBase64, fichaId } = req.body;
+
+    if (req.user.rol === 'cliente') {
+      if (!fichaId) return res.status(400).json({ mensaje: 'fichaId es obligatorio' });
+      const ficha = await FichaTemporada.findOne({
+        _id: fichaId,
+        'apoderado.correo': { $regex: new RegExp(`^${req.user.email}$`, 'i') }
+      }).select('_id');
+      if (!ficha) return res.status(403).json({ mensaje: 'No tienes acceso a esta ficha' });
+    }
+
+    const nuevoPago = new Pago({
+      apoderado, alumno, sede, monto, fecha, voucherBase64, fichaId,
+      estado: 'pendiente',
+    });
     const guardado = await nuevoPago.save();
     res.status(201).json(guardado);
   } catch (error) {
@@ -713,9 +717,9 @@ app.get('/rendimientos/:jugadorId', verificarToken, soloProfesor, async (req, re
   }
 });
 
-app.post('/rendimientos', verificarToken, async (req, res) => {
+app.post('/rendimientos', verificarToken, soloProfesor, async (req, res) => {
   try {
-    const { jugadorId, profesorId, fisico, tecnico, actitudinal, estrategico, comentario } = req.body;
+    const { jugadorId, fisico, tecnico, actitudinal, estrategico, comentario } = req.body;
     if (!jugadorId) return res.status(400).json({ mensaje: 'jugadorId es obligatorio' });
     if (!mongoose.Types.ObjectId.isValid(jugadorId))
       return res.status(400).json({ mensaje: 'jugadorId inválido' });
@@ -728,6 +732,10 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
     if (!estrategico || typeof estrategico !== 'object' || Array.isArray(estrategico))
       return res.status(400).json({ mensaje: 'estrategico debe ser un objeto' });
 
+    const usuario = await UsuarioSistema.findById(req.user.id).populate('profesorId');
+    const permitido = usuario?.profesorId && await jugadorPerteneceAProfesor(jugadorId, usuario.profesorId);
+    if (!permitido) return res.status(403).json({ mensaje: 'No tienes acceso a este jugador' });
+
     const fProm = promedioCategoria(fisico);
     const tProm = promedioCategoria(tecnico);
     const aProm = promedioCategoria(actitudinal);
@@ -737,8 +745,7 @@ app.post('/rendimientos', verificarToken, async (req, res) => {
 
     const doc = {
       jugadorId:   new mongoose.Types.ObjectId(jugadorId),
-      profesorId:  profesorId && mongoose.Types.ObjectId.isValid(profesorId)
-                     ? new mongoose.Types.ObjectId(profesorId) : null,
+      profesorId:  usuario.profesorId._id,
       fecha:       ahora,
       fisico:      { ...fisico, promedio: fProm },
       tecnico:     { ...tecnico, promedio: tProm },
@@ -1080,96 +1087,6 @@ app.put('/rechazar/:id', verificarToken, soloAdmin, async (req, res) => {
     res.json({ mensaje: 'Rechazado' });
   } catch (error) {
     res.status(500).json({ mensaje: 'Error al rechazar' });
-  }
-});
-
-app.post('/asistencias', verificarToken, async (req, res) => {
-  try {
-    const { jugadorId, fecha, estado, profesorId } = req.body;
-
-    if (!jugadorId || !fecha) {
-      return res.status(400).json({
-        mensaje: 'Jugador y fecha son obligatorios'
-      });
-    }
-    const fechaNormalizada = new Date(`${fecha}T00:00:00`);
-
-    const existe = await Asistencia.findOne({
-      jugadorId,
-      fecha: fechaNormalizada
-    });
-
-    if (existe) {
-      return res.status(400).json({
-        mensaje: 'Ya existe asistencia para este jugador en esa fecha'
-      });
-    }
-
-    const asistencia = await new Asistencia({
-      jugadorId,
-      fecha: fechaNormalizada,
-      estado,
-      profesorId
-    }).save();
-
-    res.status(201).json(asistencia);
-
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al registrar asistencia'
-    });
-  }
-});
-
-app.get('/asistencias', verificarToken, async (req, res) => {
-  try {
-    const asistencias = await Asistencia.find()
-      .populate('jugadorId', 'nombre categoria')
-      .populate('profesorId', 'nombre apellido')
-      .sort({ fecha: -1 });
-
-    res.json(asistencias);
-
-  } catch (error) {
-    res.status(500).json({
-      mensaje: 'Error al obtener asistencias'
-    });
-  }
-});
-
-app.get('/asistencias/resumen/:jugadorId', verificarToken, async (req, res) => {
-  try {
-    const { jugadorId } = req.params;
-
-    const asistencias = await Asistencia.find({ jugadorId });
-
-    const totalClases = asistencias.length;
-
-    const asistio = asistencias.filter(a => a.estado === 'asistio').length;
-    const justificado = asistencias.filter(a => a.estado === 'justificado').length;
-    const ausente = asistencias.filter(a => a.estado === 'ausente').length;
-
-    const porcentaje = totalClases === 0
-      ? 0
-      : Number(((asistio / totalClases) * 100).toFixed(1));
-
-    res.json({
-      jugadorId,
-      totalClases,
-      asistio,
-      justificado,
-      ausente,
-      porcentaje
-    });
-
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      mensaje: 'Error al obtener resumen'
-    });
   }
 });
 
