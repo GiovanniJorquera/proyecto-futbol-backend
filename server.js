@@ -568,6 +568,16 @@ app.post('/ficha-temporada', limiteRegistro, async (req, res) => {
         .filter((n) => !isNaN(n));
     }
 
+    const normalizarRut = (r) => (r || '').toString().replace(/[^0-9kK]/g, '').toUpperCase();
+    const rutNuevo = normalizarRut(datos.cedula);
+    if (rutNuevo) {
+      const existentes = await FichaTemporada.find({ cedula: { $exists: true, $ne: '' } }).select('cedula');
+      const yaExiste = existentes.some(f => normalizarRut(f.cedula) === rutNuevo);
+      if (yaExiste) {
+        return res.status(409).json({ mensaje: 'Este jugador ya está registrado (RUT duplicado).' });
+      }
+    }
+
     const ficha = new FichaTemporada(datos);
     await ficha.save();
 
