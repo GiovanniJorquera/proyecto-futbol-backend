@@ -283,7 +283,7 @@ function generarClaveTemporal() {
 /* LOGIN */
 app.post('/login', limiteLogin, async (req, res) => {
   try {
-    const { user, password } = req.body;
+    const { user, password } = req.body || {};
 
     if (!user || !password) {
       return res.status(400).json({
